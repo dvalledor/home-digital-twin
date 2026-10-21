@@ -1,0 +1,42 @@
+blueprint:
+  name: Clear surplus markers (Home Digital Twin)
+  description: >
+    When a heat pump is switched off (by hand, by an away routine or by the surplus automation),
+    clear its "switched on by surplus" marker, so the surplus automation never switches off a unit
+    somebody else switched on. Use the same two lists, in the same order, as in
+    "Heat with solar surplus".
+  domain: automation
+  source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/clear_surplus_markers.yaml
+  input:
+    heat_pumps:
+      name: Heat pumps
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+    markers:
+      name: Marker booleans, same order
+      selector:
+        entity:
+          domain: input_boolean
+          multiple: true
+
+mode: queued
+
+triggers:
+  - trigger: state
+    entity_id: !input heat_pumps
+    to: "off"
+
+variables:
+  heat_pumps: !input heat_pumps
+  markers: !input markers
+
+conditions:
+  - condition: template
+    value_template: "{{ trigger.entity_id in heat_pumps and heat_pumps.index(trigger.entity_id) < markers | length }}"
+
+actions:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: "{{ markers[heat_pumps.index(trigger.entity_id)] }}"

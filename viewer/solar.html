@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Solar Sizing Calculator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;700;800&display=swap">
+<style>
+/* Inputs on the left in wooden boards, the recommendation and charts on the right. One column on phones. */
+:root{
+  --bg:#F3EBDD; --paper:#FFF8EC; --paper-2:#F6EAD6; --ink:#4A3426; --muted:#7E624A; --line:#C9A982; --rim:#8A6242;
+  --leaf:#6FA04A; --leaf-dark:#4E7D33; --leaf-ink:#FFFDF6; --bad:#B23A2E;
+  --pv:#D98A12; --load:#3F73B8; --grid:#E4D3BB;
+  --display:"Fredoka","Baloo 2","Trebuchet MS",sans-serif; --body:"Nunito",system-ui,-apple-system,"Segoe UI",sans-serif; color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root{
+  --bg:#1D1915; --paper:#2A231D; --paper-2:#231D18; --ink:#F4E6D2; --muted:#C2A98C; --line:#57473A; --rim:#7B6047;
+  --leaf:#8CC266; --leaf-dark:#5E8F42; --leaf-ink:#16210F; --bad:#FF7A6B; --pv:#C08214; --load:#5F8ED0; --grid:#3A3028; color-scheme:dark } }
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:18px 36px}
+.wrap{max-width:1280px;margin-inline:auto;display:flex;flex-direction:column;gap:16px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:10px 18px}
+.eyebrow{font-family:var(--display);font-weight:600;font-size:13px;letter-spacing:.06em;color:var(--leaf-dark);margin:0 0 2px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(1.6rem,3.4vw,2.3rem);margin:0;line-height:1.05}
+.lead{margin:6px 0 0;color:var(--muted);max-width:70ch}
+a{color:var(--leaf-dark);font-weight:700}
+.layout{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:16px;align-items:start}
+@media (max-width:900px){.layout{grid-template-columns:minmax(0,1fr)} .layout>.col.out{order:-1}}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+section.pan{background:var(--paper);border:2px solid var(--rim);border-radius:18px;box-shadow:0 4px 0 var(--rim);padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+h2{font-family:var(--display);font-weight:700;font-size:1.15rem;margin:0}
+h3{font-family:var(--display);font-weight:600;font-size:1rem;margin:0}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px 10px}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:12.5px;font-weight:800;color:var(--muted);min-width:0}
+label.f input,label.f select,textarea{font:inherit;font-size:14px;font-weight:400;color:var(--ink);background:var(--paper-2);border:2px solid var(--line);border-radius:10px;padding:6px 8px;min-width:0;width:100%}
+textarea{min-height:64px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;resize:vertical}
+label.sl{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font-size:13px;color:var(--muted);font-weight:800}
+label.sl input{grid-column:1/-1;accent-color:var(--leaf);width:100%}
+label.sl output{font-family:var(--display);font-weight:700;color:var(--ink)}
+.face{border:2px dashed var(--line);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.face .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.face .fit{font-size:13px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+button{font-family:var(--display);font-size:14px;font-weight:600;color:var(--ink);background:var(--paper-2);border:2px solid var(--rim);border-radius:12px;padding:5px 12px 6px;cursor:pointer;box-shadow:0 3px 0 var(--rim)}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--rim)}
+button.small{font-size:13px;padding:3px 10px 4px}
+button[aria-pressed="true"]{background:var(--leaf);color:var(--leaf-ink);border-color:var(--leaf-dark);box-shadow:0 3px 0 var(--leaf-dark)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--load);outline-offset:2px}
+.hero{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;align-items:center}
+.hero .big{font-family:var(--display);font-weight:700;font-size:clamp(2.2rem,5vw,3rem);line-height:1;font-variant-numeric:tabular-nums}
+.hero .what{font-family:var(--display);font-weight:600;font-size:1.05rem}
+.hero .why{grid-column:1/-1;color:var(--muted);font-size:14px;margin:4px 0 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}
+.kpi{background:var(--paper-2);border:2px dashed var(--line);border-radius:12px;padding:8px 10px}
+.kpi .k{font-size:12px;font-weight:800;color:var(--muted)}
+.kpi .v{font-family:var(--display);font-weight:700;font-size:1.25rem;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12px;color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px;font-weight:700;color:var(--muted)}
+.legend i{display:inline-block;width:14px;height:10px;border-radius:3px;margin-right:6px;vertical-align:0}
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.tip{position:absolute;pointer-events:none;background:var(--paper);border:2px solid var(--rim);border-radius:10px;padding:5px 9px;font-size:13px;box-shadow:0 2px 0 var(--rim);white-space:nowrap;transform:translate(-50%,calc(-100% - 10px));opacity:0;transition:opacity .1s;z-index:2}
+.tip b{font-family:var(--display)}
+.tip .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:5px 6px;border-bottom:2px dotted var(--line)}
+th{font-family:var(--display);font-size:12px;font-weight:600;color:var(--muted)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.best td{background:color-mix(in srgb,var(--leaf) 16%,transparent);font-weight:800}
+.scroll{overflow-x:auto}
+details summary{cursor:pointer;font-family:var(--display);font-weight:600}
+.note{font-size:13px;color:var(--muted);margin:0}
+.warn{font-size:13px;color:var(--bad);margin:0;font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <p class="eyebrow">Home Digital Twin · Solar</p>
+      <h1>How many solar panels do you need?</h1>
+      <p class="lead">Describe your roof, your consumption and your prices. The calculator fits panels on each roof face, simulates every hour of a typical year with or without a battery and recommends a size. <a href="index.html">Back to the house</a></p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <div class="col">
+      <section class="pan">
+        <h2>Where</h2>
+        <div class="fields">
+          <label class="f">Latitude<input id="lat" type="number" step="0.01" value="40.42"></label>
+          <label class="f">Longitude<input id="lon" type="number" step="0.01" value="-3.70"></label>
+          <label class="f">Standard time vs UTC (h)<input id="utc" type="number" step="0.5" value="1"></label>
+          <label class="f">Summer time<select id="dst"><option value="eu">Europe</option><option value="us">North America</option><option value="">None</option></select></label>
+        </div>
+        <label class="f">Climate<select id="climate"></select></label>
+        <details>
+          <summary>Use PVGIS numbers (more accurate)</summary>
+          <p class="note">Open <a href="https://re.jrc.ec.europa.eu/pvg_tools/en/" target="_blank" rel="noopener">PVGIS</a>, choose "Grid connected", peak power 1 kWp, your tilt and azimuth (PVGIS: 0 = south, −90 = east, 90 = west), and paste the 12 monthly kWh values (E_m) here, one line per roof face in the same order. Or run <code>tools/pvgis_sizing.py</code> and paste its output.</p>
+          <textarea id="pvgis" placeholder="Face 1: 98 112 148 157 175 181 196 186 155 128 99 90"></textarea>
+        </details>
+      </section>
+
+      <section class="pan">
+        <div class="row" style="justify-content:space-between"><h2>Roof faces</h2><button class="small" id="addFace" type="button">Add a face</button></div>
+        <div id="faces"></div>
+        <p class="note">Measure the usable rectangle: skip chimneys, skylights and the strip along ridges and edges. Azimuth is where the face looks: 180 south, 90 east, 270 west.</p>
+      </section>
+
+      <section class="pan">
+        <h2>Panels and equipment</h2>
+        <div class="fields">
+          <label class="f">Panel power (W)<input id="pW" type="number" step="5" value="450"></label>
+          <label class="f">Panel width (m)<input id="pWid" type="number" step="0.01" value="1.13"></label>
+          <label class="f">Panel length (m)<input id="pLen" type="number" step="0.01" value="1.76"></label>
+          <label class="f">System losses (%)<input id="loss" type="number" step="1" value="14"></label>
+        </div>
+        <div class="fields">
+          <label class="f">Battery<select id="batt"><option value="auto">Recommend one</option></select></label>
+          <label class="f">Inverter<select id="inv"><option value="auto">Recommend one</option></select></label>
+        </div>
+      </section>
+
+      <section class="pan">
+        <h2>Your consumption</h2>
+        <div class="fields">
+          <label class="f">Electricity per year (kWh)<input id="kwh" type="number" step="100" value="4500"></label>
+          <label class="f">Electric car per year (kWh)<input id="ev" type="number" step="100" value="0"></label>
+          <label class="f">Season pattern<select id="season">
+            <option value="flat">Flat all year</option>
+            <option value="winter-heat-pump">More in winter (heat pump)</option>
+            <option value="summer-cooling">More in summer (air conditioning)</option>
+            <option value="heat-pump-and-cooling">Both winter and summer</option>
+          </select></label>
+        </div>
+        <label class="sl">Used between 09:00 and 18:00 <output id="oDay">35 %</output><input id="day" type="range" min="15" max="70" step="5" value="35"></label>
+        <p class="note">Your bills show the yearly kWh. Working from home, a heat pump running in the day or a car charged at midday raise the daytime share.</p>
+      </section>
+
+      <section class="pan">
+        <h2>Prices</h2>
+        <div class="fields">
+          <label class="f">Buying (€/kWh)<input id="pImp" type="number" step="0.01" value="0.20"></label>
+          <label class="f">Selling surplus (€/kWh)<input id="pExp" type="number" step="0.01" value="0.05"></label>
+          <label class="f">Installed panels (€/Wp)<input id="pWp" type="number" step="0.05" value="1.20"></label>
+          <label class="f">Battery (€/kWh)<input id="pBat" type="number" step="10" value="550"></label>
+          <label class="f">Electricity price rise (%/yr)<input id="pGrow" type="number" step="0.5" value="1"></label>
+        </div>
+        <label class="sl">Size the panels to cover <output id="oCov">100 % of the year</output><input id="cov" type="range" min="40" max="200" step="10" value="100"></label>
+      </section>
+    </div>
+
+    <div class="col out">
+      <section class="pan" aria-live="polite">
+        <h2>Recommendation</h2>
+        <div class="hero"><span class="big" id="hN">—</span><span class="what" id="hWhat">—</span><p class="why" id="hWhy"></p></div>
+        <p class="warn" id="hWarn" hidden></p>
+        <div class="kpis">
+          <div class="kpi"><div class="k">Production per year</div><div class="v" id="kProd">—</div><div class="s" id="kYield"></div></div>
+          <div class="kpi"><div class="k">Covered by the sun</div><div class="v" id="kSuff">—</div><div class="s">of your consumption</div></div>
+          <div class="kpi"><div class="k">Used at home</div><div class="v" id="kSelf">—</div><div class="s">of what you produce</div></div>
+          <div class="kpi"><div class="k">Saving per year</div><div class="v" id="kSave">—</div><div class="s" id="kCost"></div></div>
+          <div class="kpi"><div class="k">Pays for itself in</div><div class="v" id="kPay">—</div><div class="s" id="kNet"></div></div>
+        </div>
+        <div class="row"><button class="small" id="copy" type="button">Copy for house.json</button><span class="note" id="copied"></span></div>
+      </section>
+
+      <section class="pan">
+        <h3>Production and consumption by month</h3>
+        <div class="legend"><span><i style="background:var(--pv)"></i>Solar production</span><span><i style="background:var(--load)"></i>Consumption</span></div>
+        <div class="chart" id="cMonth"></div>
+        <details><summary>Table</summary><div class="scroll"><table id="tMonth"></table></div></details>
+      </section>
+
+      <section class="pan">
+        <div class="row" style="justify-content:space-between"><h3>An average day</h3><div class="row" id="dayPick" role="group" aria-label="Month"></div></div>
+        <div class="legend"><span><i style="background:var(--pv)"></i>Solar production</span><span><i style="background:var(--load)"></i>Consumption</span></div>
+        <div class="chart" id="cDay"></div>
+        <p class="note" id="dayNote"></p>
+      </section>
+
+      <section class="pan">
+        <h3>Other sizes</h3>
+        <div class="scroll"><table id="tSizes"></table></div>
+        <p class="note">Each row uses the best battery for that size. Simple model, no subsidies or taxes. Ask two installers for a quote and a production estimate before buying.</p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="solar.js"></script>
+<script>
+(function(){
+'use strict';
+const $=id=>document.getElementById(id), S=window.Solar;
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const store={get(k){try{return JSON.parse(localStorage.getItem(k)||'null');}catch(e){return null;}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}};
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt=(v,d)=>v.toLocaleString('en-GB',{maximumFractionDigits:d||0,minimumFractionDigits:d||0});
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+Object.entries(S.CLIMATES).forEach(([k,c])=>$('climate').insertAdjacentHTML('beforeend','<option value="'+k+'">'+esc(c.label)+'</option>'));
+S.BATTERIES.forEach(b=>$('batt').insertAdjacentHTML('beforeend','<option value="'+b+'">'+(b?b+' kWh':'No battery')+'</option>'));
+S.INVERTERS.forEach(b=>$('inv').insertAdjacentHTML('beforeend','<option value="'+b+'">'+b+' kW</option>'));
+
+let faces=[{name:'South roof',az:180,tilt:30,w:8,l:5}];
+function renderFaces(){const box=$('faces'); box.innerHTML='';
+  faces.forEach((f,i)=>{const d=document.createElement('div'); d.className='face';
+    d.innerHTML='<div class="top"><input aria-label="Face name" class="nm" style="font:inherit;font-family:var(--display);font-weight:600;border:0;background:none;color:var(--ink);min-width:0;flex:1" value="'+esc(f.name)+'">'+(faces.length>1?'<button class="small rm" type="button">Remove</button>':'')+'</div>'+
+      '<div class="fields"><label class="f">Azimuth (°)<input data-k="az" type="number" step="5" value="'+f.az+'"></label><label class="f">Tilt (°)<input data-k="tilt" type="number" step="1" value="'+f.tilt+'"></label>'+
+      '<label class="f">Usable width (m)<input data-k="w" type="number" step="0.1" value="'+f.w+'"></label><label class="f">Usable length, slope (m)<input data-k="l" type="number" step="0.1" value="'+f.l+'"></label></div><div class="fit"></div>';
+    d.querySelector('.nm').oninput=e=>{f.name=e.target.value; run();};
+    d.querySelectorAll('input[data-k]').forEach(inp=>inp.oninput=()=>{f[inp.dataset.k]=+inp.value; run();});
+    const rm=d.querySelector('.rm'); if(rm) rm.onclick=()=>{faces.splice(i,1); renderFaces(); run();};
+    box.appendChild(d);});}
+$('addFace').onclick=()=>{faces.push({name:'Face '+(faces.length+1),az:90,tilt:30,w:6,l:4}); renderFaces(); run();};
+
+const IDS=['lat','lon','utc','dst','climate','pvgis','pW','pWid','pLen','loss','batt','inv','kwh','ev','season','day','pImp','pExp','pWp','pBat','pGrow','cov'];
+function save(){const o={faces}; IDS.forEach(id=>o[id]=$(id).value); store.set('hdt.solar',o);}
+function restore(o){if(!o) return false; if(Array.isArray(o.faces)&&o.faces.length) faces=o.faces; IDS.forEach(id=>{if(o[id]!=null) $(id).value=o[id];}); return true;}
+
+function parsePvgis(){const lines=$('pvgis').value.split(/\n/).map(l=>l.replace(/^[^:]*:/,'').trim()).filter(Boolean);
+  const arr=lines.map(l=>l.split(/[\s,;]+/).map(Number).filter(x=>isFinite(x)&&x>0)).filter(a=>a.length===12); return arr.length?arr:null;}
+
+/* Evaluate one design: n panels spread over the faces (best face first), with a given battery. */
+function evaluate(ctx,n,batt){const {site,order,fit,panelKw,inv}=ctx; let left=n; const arrays=[], perFace=[];
+  order.forEach(i=>{const k=Math.min(left,fit[i].n); left-=k; perFace[i]=k; if(k>0) arrays.push({kwp:k*panelKw,tiltDeg:faces[i].tilt,azimuthDeg:faces[i].az,lossesPct:+$('loss').value,face:i});});
+  const kwp=n*panelKw, invKw=inv==='auto'?S.suggestInverter(kwp):+inv;
+  const pv=ctx.pvgis?arrays.map(a=>ctx.pvgis[a.face]||null):null;
+  const y=S.yearProfile(Object.assign({},site,{inverterKw:invKw,pvgisMonthlyKwhPerKwp:pv&&pv.every(Boolean)?pv:null}),arrays);
+  const sim=S.simulate(y,{annualKwh:ctx.load,daytimeShare:ctx.dayShare,season:ctx.season,batteryKwh:batt});
+  const eco=S.economics(sim,{kwp,costPerWp:+$('pWp').value,batteryKwh:batt,batteryCostPerKwh:+$('pBat').value,importPrice:+$('pImp').value,exportPrice:+$('pExp').value,priceGrowthPct:+$('pGrow').value,years:25});
+  return {n,kwp,batt,invKw,perFace,y,sim,eco};}
+const bestBattery=(ctx,n)=>{const list=$('batt').value==='auto'?S.BATTERIES:[+$('batt').value]; return list.map(b=>evaluate(ctx,n,b)).reduce((a,b)=>b.eco.net>a.eco.net?b:a);};
+
+let current=null, dayMonth=0;
+function run(){save();
+  const panel={widthM:+$('pWid').value,lengthM:+$('pLen').value}, panelKw=(+$('pW').value)/1000;
+  const site={lat:+$('lat').value,lon:+$('lon').value,utcOffsetHours:+$('utc').value,daylightSaving:$('dst').value,climate:$('climate').value};
+  const fit=faces.map(f=>S.panelsThatFit({widthM:f.w,lengthM:f.l},panel));
+  // order faces by yield per kWp
+  const yieldOf=f=>S.yearProfile(site,[{kwp:1,tiltDeg:f.tilt,azimuthDeg:f.az}]).specificYield;
+  const yields=faces.map(yieldOf), order=faces.map((_,i)=>i).sort((a,b)=>yields[b]-yields[a]);
+  [...$('faces').children].forEach((d,i)=>{const t=fit[i]; d.querySelector('.fit').textContent=t.n?t.n+' panels fit ('+t.cols+' × '+t.rows+', '+t.orientation+') · '+fmt(yields[i])+' kWh per kWp a year':'No panel fits this rectangle'+(yields[i]<700?'':'');});
+  const maxN=fit.reduce((s,f)=>s+f.n,0);
+  $('oDay').textContent=$('day').value+' %'; $('oCov').textContent=$('cov').value+' % of the year';
+  const load=(+$('kwh').value)+(+$('ev').value);
+  const ctx={site,order,fit,panelKw,inv:$('inv').value,load,dayShare:(+$('day').value)/100,season:$('season').value,pvgis:parsePvgis()};
+  if(!maxN||!load||!panelKw){$('hN').textContent='—'; $('hWhat').textContent=!maxN?'No panels fit: check the roof sizes':'Enter your consumption'; return;}
+  // target: cover X % of yearly consumption, limited by the roof
+  const avgYield=order.reduce((s,i)=>s+yields[i]*fit[i].n,0)/maxN;
+  const target=Math.max(1,Math.min(maxN,Math.round(load*(+$('cov').value)/100/(avgYield*panelKw))));
+  const rec=bestBattery(ctx,target); current=rec;
+  const t=rec.sim.total, hd=rec.eco;
+  $('hN').textContent=rec.n+' panels';
+  $('hWhat').textContent=fmt(rec.kwp,2)+' kWp · '+rec.invKw+' kW inverter · '+(rec.batt?rec.batt+' kWh battery':'no battery');
+  $('hWhy').textContent=faces.map((f,i)=>rec.perFace[i]?rec.perFace[i]+' on '+f.name:null).filter(Boolean).join(', ')+'. '+(rec.n>=maxN?'That fills the usable roof. ':'')+
+    (rec.batt?'The battery stores midday surplus for the evening and pays back best at this size.':'With these prices a battery does not pay back over 25 years; selling the surplus is better.');
+  $('hWarn').hidden=!(rec.n>=maxN&&load*(+$('cov').value)/100>rec.y.kwh*1.05);
+  $('hWarn').textContent='The roof is full before reaching the target: the panels cover '+fmt(rec.y.kwh/load*100)+' % of the year.';
+  $('kProd').textContent=fmt(rec.y.kwh)+' kWh'; $('kYield').textContent=fmt(rec.y.specificYield)+' kWh per kWp'+(ctx.pvgis?' (PVGIS)':' (model)');
+  $('kSuff').textContent=fmt(t.selfSufficiency*100)+' %'; $('kSelf').textContent=fmt(t.selfConsumption*100)+' %';
+  $('kSave').textContent='€'+fmt(hd.annualSaving); $('kCost').textContent='Cost about €'+fmt(hd.cost);
+  $('kPay').textContent=hd.payback==null?'over 25 yr':fmt(hd.payback,1)+' years'; $('kNet').textContent='Net after 25 years €'+fmt(hd.net);
+  monthChart(rec); dayChart(rec); sizesTable(ctx,rec,maxN);}
+
+/* ---- charts (SVG, hover tooltips) ---- */
+function tipFor(box){let t=box.querySelector('.tip'); if(!t){t=document.createElement('div'); t.className='tip'; box.appendChild(t);} return t;}
+const sw=c=>'<span class="sw" style="background:'+c+'"></span>';
+function monthChart(rec){const box=$('cMonth'), W=Math.max(300,box.clientWidth||600), H=240, L=44, R=6, T=22, B=24;
+  const ms=rec.sim.months, max=Math.max(...ms.map(m=>Math.max(m.pv,m.load)))*1.1, X=i=>L+i*(W-L-R)/12, bw=((W-L-R)/12-6)/2, Y=v=>T+(1-v/max)*(H-T-B);
+  const step=max>1500?500:max>600?200:100; let g='';
+  for(let v=0;v<=max;v+=step) g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="'+css('--grid')+'" stroke-width="1"/><text x="'+(L-6)+'" y="'+(Y(v)+4)+'" text-anchor="end" font-size="11" fill="'+css('--muted')+'">'+fmt(v)+'</text>';
+  const bar=(x,v,c)=>{const y=Y(v),h=Math.max(0,Y(0)-y),r=Math.min(4,h,bw/2); return '<path d="M'+x+','+Y(0)+'V'+(y+r)+'Q'+x+','+y+' '+(x+r)+','+y+'H'+(x+bw-r)+'Q'+(x+bw)+','+y+' '+(x+bw)+','+(y+r)+'V'+Y(0)+'Z" fill="'+c+'"/>';};
+  ms.forEach((m,i)=>{const x=X(i)+3; g+=bar(x,m.pv,css('--pv'))+bar(x+bw+2,m.load,css('--load'))+'<text x="'+(X(i)+(W-L-R)/24)+'" y="'+(H-6)+'" text-anchor="middle" font-size="11" fill="'+css('--muted')+'">'+MONTHS[i]+'</text>'+
+    '<rect class="hit" data-i="'+i+'" x="'+X(i)+'" y="'+T+'" width="'+((W-L-R)/12)+'" height="'+(H-T-B)+'" fill="transparent"/>';});
+  g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="'+css('--muted')+'" stroke-width="1"/><text x="2" y="10" font-size="11" fill="'+css('--muted')+'">kWh</text>';
+  box.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Monthly solar production and consumption in kWh">'+g+'</svg>';
+  const tip=tipFor(box);
+  box.querySelectorAll('.hit').forEach(r=>{const i=+r.dataset.i, m=ms[i];
+    r.onpointerenter=()=>{tip.innerHTML='<b>'+MONTHS[i]+'</b><br>'+sw(css('--pv'))+'Production '+fmt(m.pv)+' kWh<br>'+sw(css('--load'))+'Consumption '+fmt(m.load)+' kWh<br>From the grid '+fmt(m.imp)+' · sold '+fmt(m.exp);
+      const sx=box.clientWidth/W; tip.style.left=Math.min(box.clientWidth-90,Math.max(90,(X(i)+(W-L-R)/24)*sx))+'px'; tip.style.top=(Y(Math.max(m.pv,m.load))*sx)+'px'; tip.style.opacity=1;};
+    r.onpointerleave=()=>tip.style.opacity=0;});
+  $('tMonth').innerHTML='<thead><tr><th>Month</th><th class="n">Production</th><th class="n">Consumption</th><th class="n">Used at home</th><th class="n">From grid</th><th class="n">Sold</th></tr></thead><tbody>'+
+    ms.map((m,i)=>'<tr><td>'+MONTHS[i]+'</td><td class="n">'+fmt(m.pv)+'</td><td class="n">'+fmt(m.load)+'</td><td class="n">'+fmt(m.self)+'</td><td class="n">'+fmt(m.imp)+'</td><td class="n">'+fmt(m.exp)+'</td></tr>').join('')+'</tbody>';}
+
+function dayChart(rec){const box=$('cDay'), W=Math.max(300,box.clientWidth||600), H=222, L=40, R=8, T=22, B=24;
+  const hs=rec.sim.months[dayMonth].hours, max=Math.max(.5,...hs.map(h=>Math.max(h.pv,h.load)))*1.12, X=h=>L+h*(W-L-R)/24, Y=v=>T+(1-v/max)*(H-T-B);
+  let g=''; const step=max>4?1:max>2?.5:.25;
+  for(let v=0;v<=max;v+=step) g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="'+css('--grid')+'" stroke-width="1"/><text x="'+(L-6)+'" y="'+(Y(v)+4)+'" text-anchor="end" font-size="11" fill="'+css('--muted')+'">'+fmt(v,step<1?2:0)+'</text>';
+  const hs3=W<520?6:3; for(let h=0;h<=24;h+=hs3) g+='<text x="'+X(h)+'" y="'+(H-6)+'" text-anchor="middle" font-size="11" fill="'+css('--muted')+'">'+String(h).padStart(2,'0')+':00</text>';
+  const path=k=>hs.map((h,i)=>(i?'L':'M')+X(i+.5).toFixed(1)+','+Y(h[k]).toFixed(1)).join('');
+  g+='<path d="'+path('pv')+'" fill="none" stroke="'+css('--pv')+'" stroke-width="2" stroke-linejoin="round"/><path d="'+path('load')+'" fill="none" stroke="'+css('--load')+'" stroke-width="2" stroke-linejoin="round"/>';
+  g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="'+css('--muted')+'" stroke-width="1"/><text x="2" y="10" font-size="11" fill="'+css('--muted')+'">kW</text>';
+  g+='<line class="xh" y1="'+T+'" y2="'+Y(0)+'" stroke="'+css('--ink')+'" stroke-width="1" stroke-dasharray="2 3" opacity="0"/>';
+  g+='<rect class="hit" x="'+L+'" y="'+T+'" width="'+(W-L-R)+'" height="'+(H-T-B)+'" fill="transparent"/>';
+  box.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Average day in '+MONTHS[dayMonth]+': solar production and consumption by hour">'+g+'</svg>';
+  const tip=tipFor(box), svg=box.querySelector('svg'), xh=box.querySelector('.xh');
+  const mv=e=>{const r=svg.getBoundingClientRect(), sx=r.width/W, x=(e.clientX-r.left)/sx, i=Math.max(0,Math.min(23,Math.floor((x-L)/((W-L-R)/24)))), h=hs[i];
+    xh.setAttribute('x1',X(i+.5)); xh.setAttribute('x2',X(i+.5)); xh.setAttribute('opacity',1);
+    tip.innerHTML='<b>'+String(i).padStart(2,'0')+':00–'+String(i+1).padStart(2,'0')+':00</b><br>'+sw(css('--pv'))+'Production '+fmt(h.pv,2)+' kW<br>'+sw(css('--load'))+'Consumption '+fmt(h.load,2)+' kW'+(current.batt?'<br>Battery '+fmt(h.soc*100)+' %':'');
+    tip.style.left=Math.min(r.width-90,Math.max(90,X(i+.5)*sx))+'px'; tip.style.top=(Y(Math.max(h.pv,h.load))*sx)+'px'; tip.style.opacity=1;};
+  box.querySelector('.hit').onpointermove=mv; box.querySelector('.hit').onpointerdown=mv; box.querySelector('.hit').onpointerleave=()=>{tip.style.opacity=0; xh.setAttribute('opacity',0);};
+  const m=rec.sim.months[dayMonth]; $('dayNote').textContent='In '+MONTHS[dayMonth]+' an average day makes '+fmt(m.pv/S.DAYS[dayMonth],1)+' kWh and uses '+fmt(m.load/S.DAYS[dayMonth],1)+' kWh; '+fmt(m.imp/S.DAYS[dayMonth],1)+' kWh still come from the grid. Cloudy days make less and sunny days more.';}
+[0,3,6,9].forEach(m=>{const b=document.createElement('button'); b.type='button'; b.className='small'; b.textContent=MONTHS[m]; b.onclick=()=>{dayMonth=m; [...$('dayPick').children].forEach(x=>x.setAttribute('aria-pressed',String(x===b))); if(current) dayChart(current);}; b.setAttribute('aria-pressed',String(m===0)); $('dayPick').appendChild(b);});
+
+function sizesTable(ctx,rec,maxN){const ns=new Set(); [.5,.75,1,1.25,1.5].forEach(f=>ns.add(Math.max(1,Math.min(maxN,Math.round(rec.n*f))))); ns.add(maxN);
+  const rows=[...ns].sort((a,b)=>a-b).map(n=>n===rec.n?rec:bestBattery(ctx,n));
+  $('tSizes').innerHTML='<thead><tr><th>Panels</th><th class="n">kWp</th><th class="n">Battery</th><th class="n">Covered</th><th class="n">Cost</th><th class="n">Payback</th><th class="n">Net 25 yr</th></tr></thead><tbody>'+
+    rows.map(r=>'<tr'+(r.n===rec.n?' class="best"':'')+'><td>'+r.n+(r.n===rec.n?' (recommended)':'')+(r.n===maxN?' (full roof)':'')+'</td><td class="n">'+fmt(r.kwp,2)+'</td><td class="n">'+(r.batt?r.batt+' kWh':'none')+'</td><td class="n">'+fmt(r.sim.total.selfSufficiency*100)+' %</td><td class="n">€'+fmt(r.eco.cost)+'</td><td class="n">'+(r.eco.payback==null?'&gt;25 yr':fmt(r.eco.payback,1)+' yr')+'</td><td class="n">€'+fmt(r.eco.net)+'</td></tr>').join('')+'</tbody>';}
+
+$('copy').onclick=async()=>{if(!current) return; const f0=current.perFace.findIndex(n=>n>0), f=faces[f0]||faces[0];
+  const block={solarPanels:{roofSide:'back',rows:Math.max(1,Math.round(Math.sqrt(current.n/2))),cols:Math.ceil(current.n/Math.max(1,Math.round(Math.sqrt(current.n/2)))),panelWidth:+$('pWid').value,panelLength:+$('pLen').value,
+    panelWatt:+$('pW').value,azimuthDeg:f.az,tiltDeg:f.tilt,lossesPct:+$('loss').value,inverterKw:current.invKw,batteryKwh:current.batt,climate:$('climate').value}};
+  const txt=JSON.stringify(block,null,2).replace(/^\{\n|\n\}$/g,'');
+  try{await navigator.clipboard.writeText(txt); $('copied').textContent='Copied. Paste it into house.json and set roofSide to the roof side that holds the panels.';}
+  catch(e){$('copied').textContent=txt;}};
+
+document.querySelectorAll('input,select,textarea').forEach(el=>{if(!el.closest('#faces')) el.addEventListener('input',run);});
+let rT; new ResizeObserver(()=>{clearTimeout(rT); rT=setTimeout(()=>{if(current){monthChart(current); dayChart(current);}},120);}).observe($('cMonth'));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>current&&(monthChart(current),dayChart(current)));
+
+/* Prefill: saved values, else the house file next to this page. */
+async function init(){
+  if(!restore(store.get('hdt.solar'))){
+    for(const u of ['house.json','house.example.json']){try{const r=await fetch(u,{cache:'no-store'}); if(!r.ok) continue; const h=await r.json();
+      if(h.location){$('lat').value=h.location.lat; $('lon').value=h.location.lon; $('utc').value=h.location.utcOffsetHours||0; $('dst').value=h.location.daylightSaving||'';}
+      const sp=h.solarPanels; if(sp){faces=[{name:'Roof with panels',az:sp.azimuthDeg,tilt:sp.tiltDeg,w:Math.ceil((sp.cols*(sp.panelWidth+.02)+.6)*10)/10,l:Math.ceil((sp.rows*(sp.panelLength+.02)+.6)*10)/10}];
+        if(sp.panelWatt) $('pW').value=sp.panelWatt; if(sp.lossesPct!=null) $('loss').value=sp.lossesPct; $('pWid').value=sp.panelWidth; $('pLen').value=sp.panelLength; if(sp.climate) $('climate').value=sp.climate;}
+      break;}catch(e){}}}
+  renderFaces(); run();}
+window.__probe=()=>current&&{n:current.n,kwp:current.kwp,batt:current.batt,inv:current.invKw,kwh:Math.round(current.y.kwh),self:current.sim.total.selfSufficiency.toFixed(2),pay:current.eco.payback&&current.eco.payback.toFixed(1)};
+init();
+})();
+</script>
+</body>
+</html>

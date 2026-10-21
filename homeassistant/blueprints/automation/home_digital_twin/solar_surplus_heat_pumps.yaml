@@ -1,0 +1,231 @@
+blueprint:
+  name: Heat with solar surplus (Home Digital Twin)
+  description: >
+    Switches heat pumps / air conditioners on, one at a time and in priority order, using only
+    solar energy that the forecast says will come back before sunset. Starts when the battery is
+    full and the house exports to the grid, adds units while there is margin, and switches them
+    off again in reverse order when the battery falls below the dynamic floor. It never switches
+    off a unit that it did not switch on (marker booleans), waits 10 minutes between steps and
+    leaves a unit alone for 45 minutes after it was switched off.
+
+    Needs the helpers and sensors of packages/home_digital_twin.yaml.
+    Guide: https://github.com/dvalledor/home-digital-twin/blob/main/docs/automations.md
+  domain: automation
+  source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/solar_surplus_heat_pumps.yaml
+  input:
+    units:
+      name: Units
+      icon: mdi:heat-pump-outline
+      input:
+        heat_pumps:
+          name: Heat pumps, in priority order
+          description: The first one is switched on first and off last. Put the biggest consumer last.
+          selector:
+            entity:
+              domain: climate
+              multiple: true
+        markers:
+          name: Marker booleans, same order
+          description: One "switched on by surplus" input_boolean per heat pump, in the same order.
+          selector:
+            entity:
+              domain: input_boolean
+              multiple: true
+        setpoint:
+          name: Setpoint
+          default: 22
+          selector:
+            number:
+              min: 16
+              max: 28
+              step: 0.5
+              unit_of_measurement: "°C"
+        cool_above:
+          name: Cool instead of heat above
+          description: If the room is warmer than this, the unit starts in cooling mode.
+          default: 24
+          selector:
+            number:
+              min: 20
+              max: 32
+              step: 0.5
+              unit_of_measurement: "°C"
+    energy:
+      name: Energy
+      icon: mdi:solar-power
+      input:
+        battery_soc:
+          name: Battery level
+          selector:
+            entity:
+              domain: sensor
+              device_class: battery
+        grid_power:
+          name: Grid power
+          description: Power exchanged with the grid, in W.
+          selector:
+            entity:
+              domain: sensor
+              device_class: power
+        export_is_positive:
+          name: Export is positive
+          description: On if the grid sensor is positive while exporting. Off if it is negative while exporting.
+          default: true
+          selector:
+            boolean: {}
+        margin_sensor:
+          name: Battery margin sensor
+          default: sensor.surplus_battery_margin
+          selector:
+            entity:
+              domain: sensor
+        full_battery:
+          name: Battery counts as full above
+          default: 97
+          selector:
+            number:
+              min: 80
+              max: 100
+              unit_of_measurement: "%"
+    switches:
+      name: Switches
+      icon: mdi:toggle-switch-outline
+      input:
+        enable_switch:
+          name: Main switch
+          default: input_boolean.surplus_heating
+          selector:
+            entity:
+              domain: input_boolean
+        away_entity:
+          name: Away mode (optional)
+          description: An input_boolean that is on while nobody is home. Leave empty if you have none.
+          default: []
+          selector:
+            entity:
+              domain: input_boolean
+        allow_away_switch:
+          name: Allow while away
+          default: input_boolean.surplus_allow_when_away
+          selector:
+            entity:
+              domain: input_boolean
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: time_pattern
+    minutes: "/2"
+  - trigger: state
+    entity_id: !input enable_switch
+  - trigger: state
+    entity_id: !input allow_away_switch
+  - trigger: state
+    entity_id: sun.sun
+    to: below_horizon
+
+variables:
+  heat_pumps: !input heat_pumps
+  markers: !input markers
+  setpoint: !input setpoint
+  cool_above: !input cool_above
+  soc_entity: !input battery_soc
+  grid_entity: !input grid_power
+  export_positive: !input export_is_positive
+  margin_entity: !input margin_sensor
+  full_battery: !input full_battery
+  enable_entity: !input enable_switch
+  away_entity: !input away_entity
+  allow_away_entity: !input allow_away_switch
+
+conditions:
+  - alias: "Same number of heat pumps and markers"
+    condition: template
+    value_template: "{{ heat_pumps | length == markers | length and heat_pumps | length > 0 }}"
+
+actions:
+  - variables:
+      n: "{{ heat_pumps | length }}"
+      soc: "{{ states(soc_entity) | float(0) }}"
+      export_w: "{{ (states(grid_entity) | float(0)) * (1 if export_positive else -1) }}"
+      margin_ok: "{{ has_value(margin_entity) }}"
+      margin: "{{ states(margin_entity) | float(0) }}"
+      away_blocks: >
+        {{ away_entity not in [none, '', []] and is_state(away_entity, 'on') and is_state(allow_away_entity, 'off') }}
+      on_idx: >
+        {% set ns = namespace(l=[]) %}
+        {% for i in range(n) %}{% if is_state(markers[i], 'on') %}{% set ns.l = ns.l + [i] %}{% endif %}{% endfor %}
+        {{ ns.l }}
+  - variables:
+      # a step is allowed only when no unit was switched on by this automation in the last 10 minutes
+      quiet: >
+        {% set ns = namespace(q=true) %}
+        {% for m in markers %}
+          {% if is_state(m, 'on') and (as_timestamp(now()) - as_timestamp(states[m].last_changed)) < 600 %}{% set ns.q = false %}{% endif %}
+        {% endfor %}
+        {{ ns.q }}
+      last_on: "{{ on_idx | last if on_idx else -1 }}"
+      next_off: >
+        {% set ns = namespace(i=-1) %}
+        {% for i in range(n) %}
+          {% if ns.i < 0 and is_state(markers[i], 'off') and is_state(heat_pumps[i], 'off')
+                and (as_timestamp(now()) - as_timestamp(states[heat_pumps[i]].last_changed)) > 2700 %}{# off for 45 min #}
+            {% set ns.i = i %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.i }}
+  - choose:
+      - alias: "Stop everything this automation switched on"
+        conditions:
+          - condition: template
+            value_template: >
+              {{ is_state(enable_entity, 'off') or away_blocks or is_state('sun.sun', 'below_horizon') or not margin_ok }}
+        sequence:
+          - repeat:
+              for_each: "{{ on_idx | reverse | list }}"
+              sequence:
+                - action: input_boolean.turn_off
+                  target:
+                    entity_id: "{{ markers[repeat.item] }}"
+                - action: climate.turn_off
+                  target:
+                    entity_id: "{{ heat_pumps[repeat.item] }}"
+
+      - alias: "Step down: the battery fell below the dynamic floor"
+        conditions:
+          - condition: template
+            value_template: >
+              {{ margin < -2 and last_on >= 0 and
+                 ((as_timestamp(now()) - as_timestamp(states[markers[last_on]].last_changed)) > 600 or margin < -8) }}
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ markers[last_on] }}"
+          - action: climate.turn_off
+            target:
+              entity_id: "{{ heat_pumps[last_on] }}"
+
+      - alias: "Step up: there is energy that will come back today"
+        conditions:
+          - condition: template
+            value_template: >
+              {% set start = on_idx | length == 0 and soc > full_battery and (export_w > 300 or margin > 10) %}
+              {% set extend = on_idx | length > 0 and ((soc > full_battery and export_w > 400) or margin > 25) %}
+              {{ quiet and next_off >= 0 and (start or extend) }}
+        sequence:
+          # mode first, then setpoint: some integrations ignore hvac_mode inside set_temperature
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: "{{ heat_pumps[next_off] }}"
+            data:
+              hvac_mode: >
+                {{ 'cool' if state_attr(heat_pumps[next_off], 'current_temperature') | float(20) > cool_above else 'heat' }}
+          - action: climate.set_temperature
+            target:
+              entity_id: "{{ heat_pumps[next_off] }}"
+            data:
+              temperature: "{{ setpoint }}"
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ markers[next_off] }}"

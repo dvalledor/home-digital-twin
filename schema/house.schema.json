@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dvalledor/home-digital-twin/schema/house.schema.json",
+  "title": "Home Digital Twin house",
+  "description": "One file that describes a house for the Home Digital Twin viewer. Units: metres, degrees, kWh, kW, °C. Coordinates: x along the facade (0 = left when you look at the front door), z from the front facade (0) to the back facade, y up from the lowest floor.",
+  "type": "object",
+  "required": ["name", "location", "orientation", "footprint", "roof", "rooms"],
+  "$defs": {
+    "facade": { "enum": ["front", "back"] },
+    "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "entity": { "type": "string", "pattern": "^[a-z_]+\\.[a-z0-9_]+$" },
+    "thermal": {
+      "type": "object",
+      "required": ["capacityKwhPerK", "uaKwPerK"],
+      "properties": {
+        "capacityKwhPerK": { "type": "number", "exclusiveMinimum": 0, "description": "Energy to warm the room (air, furniture, inner walls) by 1 K. Typical 0.8 to 3." },
+        "uaKwPerK": { "type": "number", "exclusiveMinimum": 0, "description": "Heat lost to the outside per kelvin of difference. Typical 0.015 to 0.08." },
+        "stratificationK": { "type": "number", "minimum": 0, "description": "How much warmer the air near the ceiling is than at bed height." },
+        "solarGainKw": { "type": "number", "minimum": 0, "description": "Heat entering through windows in full sun on the facade." },
+        "solarFacade": { "$ref": "#/$defs/facade" },
+        "roofMass": {
+          "type": "object", "description": "Heavy roof (concrete) that soaks up heat slowly.",
+          "required": ["capacityKwhPerK", "couplingKwPerK", "lossKwPerK"],
+          "properties": { "capacityKwhPerK": { "type": "number" }, "couplingKwPerK": { "type": "number" }, "lossKwPerK": { "type": "number" } }
+        }
+      }
+    }
+  },
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "location": {
+      "type": "object", "required": ["lat", "lon"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "utcOffsetHours": { "type": "number", "description": "Standard (winter) time offset to UTC." },
+        "daylightSaving": { "enum": ["eu", "us", ""] },
+        "dayOfYear": { "type": "integer", "minimum": 1, "maximum": 366, "description": "Day used by the simulation. Leave out to use today." }
+      }
+    },
+    "orientation": {
+      "type": "object", "required": ["backFacadeAzimuthDeg"],
+      "properties": {
+        "backFacadeAzimuthDeg": { "type": "number", "minimum": 0, "maximum": 360, "description": "Compass direction the back facade looks at (180 = south)." },
+        "note": { "type": "string" }
+      }
+    },
+    "footprint": { "type": "object", "required": ["width", "depth"], "properties": { "width": { "type": "number" }, "depth": { "type": "number" } } },
+    "roof": {
+      "type": "object", "required": ["ridgeZ", "ridgeY", "eaveFrontY", "eaveBackY"],
+      "properties": {
+        "type": { "enum": ["gable"] },
+        "ridgeZ": { "type": "number" }, "ridgeY": { "type": "number" },
+        "eaveFrontY": { "type": "number" }, "eaveBackY": { "type": "number" },
+        "overhang": { "type": "number" },
+        "material": { "enum": ["concrete", "timber"] },
+        "gableWindows": { "type": "array", "items": { "type": "object", "properties": { "facade": { "$ref": "#/$defs/facade" }, "x": { "type": "number" }, "y": { "type": "number" } } } }
+      }
+    },
+    "stairs": {
+      "type": "object",
+      "properties": { "frontLaneX": { "type": "number" }, "backLaneX": { "type": "number" }, "laneWidth": { "type": "number" }, "z0": { "type": "number" }, "z1": { "type": "number" }, "steps": { "type": "integer" } }
+    },
+    "rooms": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["id", "name", "y", "x0", "x1", "z0", "z1", "thermal"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "name": { "type": "string" },
+          "y": { "type": "number", "description": "Floor level." },
+          "height": { "type": "number", "description": "Ceiling height. Not used when underRoof is true." },
+          "underRoof": { "type": "boolean" },
+          "x0": { "type": "number" }, "x1": { "type": "number" }, "z0": { "type": "number" }, "z1": { "type": "number" },
+          "floor": { "enum": ["wood", "tile"] },
+          "door": { "type": "object", "required": ["x", "z"], "properties": { "x": { "type": "number" }, "z": { "type": "number" }, "swing": { "enum": [1, -1] }, "color": { "$ref": "#/$defs/color" } } },
+          "thermal": { "$ref": "#/$defs/thermal" },
+          "temperatureEntity": { "$ref": "#/$defs/entity" }
+        }
+      }
+    },
+    "walls": { "type": "array", "items": { "type": "object", "properties": { "x0": { "type": "number" }, "x1": { "type": "number" }, "z": { "type": "number" }, "y0": { "type": "number" }, "height": { "type": "number" } } } },
+    "windows": { "type": "array", "items": { "type": "object", "required": ["facade", "x", "y", "w", "h"], "properties": { "facade": { "$ref": "#/$defs/facade" }, "x": { "type": "number" }, "y": { "type": "number" }, "w": { "type": "number" }, "h": { "type": "number" } } } },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["type", "id", "room", "pos", "powerKw"],
+        "properties": {
+          "type": { "enum": ["ac", "radiator"] },
+          "id": { "type": "string" },
+          "room": { "type": "string" },
+          "pos": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+          "facing": { "enum": ["+x", "-x", "+z", "-z"] },
+          "powerKw": { "type": "number", "description": "Heat output." },
+          "fins": { "type": "integer" },
+          "sensorBiasK": { "type": "number", "description": "How much warmer the unit's own sensor reads than the room average." },
+          "runBiasK": { "type": "number", "description": "Extra sensor bias while the unit blows warm air." },
+          "surplus": { "type": "boolean", "description": "Used by the solar surplus automation." },
+          "entity": { "$ref": "#/$defs/entity" },
+          "heatingPowerEntity": { "$ref": "#/$defs/entity" }
+        }
+      }
+    },
+    "heating": {
+      "type": "object",
+      "properties": {
+        "radiatorSchedule": { "type": "array", "items": { "type": "object", "required": ["from", "to", "setpoint"], "properties": { "from": { "type": "number" }, "to": { "type": "number" }, "setpoint": { "type": "number" } } } },
+        "acSetpoint": { "type": "number" }, "acCop": { "type": "number" }, "surplusUntilHour": { "type": "number" }
+      }
+    },
+    "solarPanels": {
+      "type": "object", "required": ["roofSide", "rows", "cols", "panelWidth", "panelLength", "azimuthDeg", "tiltDeg"],
+      "properties": {
+        "roofSide": { "$ref": "#/$defs/facade" },
+        "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 },
+        "panelWidth": { "type": "number" }, "panelLength": { "type": "number" },
+        "panelWatt": { "type": "number" },
+        "azimuthDeg": { "type": "number" }, "tiltDeg": { "type": "number" },
+        "lossesPct": { "type": "number" },
+        "inverterKw": { "type": "number" }, "batteryKwh": { "type": "number" },
+        "climate": { "enum": ["sunny-south", "mediterranean-north", "central", "north"] },
+        "pvgisMonthlyKwhPerKwp": { "type": "array", "items": { "type": "number" }, "minItems": 12, "maxItems": 12 }
+      }
+    },
+    "climate": {
+      "type": "object",
+      "properties": {
+        "outdoorMaxC": { "type": "number" }, "outdoorSwingK": { "type": "number" },
+        "start": { "type": "object", "additionalProperties": { "type": "number" } }
+      }
+    },
+    "furniture": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["type", "x", "y", "z"],
+        "properties": {
+          "type": { "enum": ["box", "bed", "rug", "plant"] },
+          "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" },
+          "w": { "type": "number" }, "h": { "type": "number" }, "d": { "type": "number" },
+          "lift": { "type": "number" }, "scale": { "type": "number" },
+          "color": { "$ref": "#/$defs/color" }, "pattern": { "enum": ["check", "stars"] }
+        }
+      }
+    },
+    "exterior": { "type": "object" },
+    "homeAssistant": {
+      "type": "object",
+      "properties": {
+        "outdoorTemperatureEntity": { "$ref": "#/$defs/entity" },
+        "batterySocEntity": { "$ref": "#/$defs/entity" },
+        "gridPowerEntity": { "$ref": "#/$defs/entity" },
+        "solarPowerEntity": { "$ref": "#/$defs/entity" },
+        "pollSeconds": { "type": "integer", "minimum": 5 }
+      }
+    }
+  }
+}

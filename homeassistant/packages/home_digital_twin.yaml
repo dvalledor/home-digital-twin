@@ -1,0 +1,115 @@
+# Home Digital Twin: helpers and sensors for heating with solar surplus.
+#
+# Install
+#   1. In configuration.yaml add, once:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   2. Copy this file to /config/packages/home_digital_twin.yaml
+#   3. Replace the three entity ids marked EDIT below with yours
+#      (search for "EDIT"), then Developer tools > YAML > Check configuration and restart.
+#   4. Import the blueprints in ../blueprints/automation/home_digital_twin/ and create
+#      one automation from each (see docs/automations.md).
+#
+# Nothing in this file switches a device on by itself: it only creates helpers and two sensors.
+# The A/B test automation at the bottom starts disabled.
+
+input_boolean:
+  surplus_heating:
+    name: "Surplus · Heat with solar surplus"
+    icon: mdi:solar-power-variant
+  surplus_allow_when_away:
+    name: "Surplus · Allow while away"
+    icon: mdi:home-export-outline
+  # One marker per heat pump: "this unit was switched on by the surplus automation".
+  # The automation only ever switches off units it switched on. Add more if you have more units.
+  surplus_hp_1_on_by_surplus:
+    name: "Surplus · Heat pump 1 switched on by surplus"
+    icon: mdi:flag-outline
+  surplus_hp_2_on_by_surplus:
+    name: "Surplus · Heat pump 2 switched on by surplus"
+    icon: mdi:flag-outline
+  surplus_hp_3_on_by_surplus:
+    name: "Surplus · Heat pump 3 switched on by surplus"
+    icon: mdi:flag-outline
+
+input_number:
+  surplus_forecast_correction:
+    name: "Surplus · Forecast correction factor"
+    min: 0.3
+    max: 1.2
+    step: 0.05
+    initial: 0.65   # start here; tune with docs/automations.md (real production / forecast)
+    mode: box
+  surplus_house_base_load:
+    name: "Surplus · House base load"
+    min: 0
+    max: 3
+    step: 0.05
+    initial: 0.4
+    unit_of_measurement: kW
+    mode: box
+  surplus_battery_min_soc:
+    name: "Surplus · Lowest battery level"
+    min: 10
+    max: 100
+    step: 1
+    initial: 30
+    unit_of_measurement: "%"
+    mode: slider
+  surplus_battery_kwh_per_percent:
+    name: "Surplus · Battery kWh per percent"
+    min: 0.01
+    max: 0.5
+    step: 0.001
+    initial: 0.05   # usable capacity / 100, e.g. 5 kWh battery = 0.05
+    mode: box
+
+template:
+  - sensor:
+      # Lowest battery level we can go down to and still be refilled by the sun before sunset,
+      # using the corrected forecast of the energy still to come today and the house base load.
+      - name: "Surplus · Dynamic battery floor"
+        unique_id: home_digital_twin_surplus_dynamic_floor
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:battery-arrow-down-outline
+        state: >
+          {% set remaining = states('sensor.energy_production_today_remaining') | float(0) %}  {# EDIT: solar forecast, kWh still to come today #}
+          {% set factor = states('input_number.surplus_forecast_correction') | float(0.65) %}
+          {% set base = states('input_number.surplus_house_base_load') | float(0.4) %}
+          {% set min_soc = states('input_number.surplus_battery_min_soc') | float(30) %}
+          {% set per_pct = states('input_number.surplus_battery_kwh_per_percent') | float(0.05) %}
+          {% set sunset = state_attr('sun.sun', 'next_setting') %}
+          {% set hours = ((as_datetime(sunset) - now()).total_seconds() / 3600) if sunset else 24 %}
+          {% set recoverable = remaining * factor - base * ([hours, 0] | max) - 0.5 %}
+          {{ [[100 - recoverable / per_pct, min_soc] | max, 100] | min | round(0) }}
+        availability: "{{ has_value('sensor.energy_production_today_remaining') }}"  # EDIT: same forecast sensor
+
+      # Battery level minus the floor. Positive = energy that will come back today.
+      - name: "Surplus · Battery margin"
+        unique_id: home_digital_twin_surplus_battery_margin
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:battery-plus-outline
+        state: >
+          {{ (states('sensor.battery_state_of_charge') | float(0)
+              - states('sensor.surplus_dynamic_battery_floor') | float(100)) | round(0) }}
+        availability: >
+          {{ has_value('sensor.battery_state_of_charge') and has_value('sensor.surplus_dynamic_battery_floor') }}
+        # EDIT: sensor.battery_state_of_charge (twice above) -> your battery level sensor, in %
+
+automation:
+  # A/B test (docs/ab-test.md): alternate "Allow while away" every morning so that you can
+  # compare days with and without pre-heating. Enable it for the test, disable it afterwards.
+  - id: home_digital_twin_ab_test_alternate_days
+    alias: "Surplus · A/B test: alternate days"
+    description: "Toggles 'Surplus · Allow while away' at 07:00. Test days: on. Control days: off."
+    initial_state: false
+    mode: single
+    triggers:
+      - trigger: time
+        at: "07:00:00"
+    actions:
+      - action: input_boolean.toggle
+        target:
+          entity_id: input_boolean.surplus_allow_when_away

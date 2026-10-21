@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 300" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <title>House coordinate system</title>
+  <rect width="520" height="300" fill="#FFF8EC"/>
+  <!-- house seen from above -->
+  <rect x="150" y="60" width="200" height="170" fill="#F3E3C8" stroke="#8A6242" stroke-width="3" rx="4"/>
+  <text x="250" y="150" text-anchor="middle" fill="#4A3426" font-weight="bold">House (from above)</text>
+  <text x="250" y="52" text-anchor="middle" fill="#7E624A">back facade · z = depth</text>
+  <text x="250" y="252" text-anchor="middle" fill="#7E624A">front facade (front door) · z = 0</text>
+  <rect x="235" y="226" width="30" height="8" fill="#8A6242"/>
+  <!-- axes -->
+  <g stroke="#C9473A" stroke-width="3" fill="#C9473A">
+    <line x1="150" y1="230" x2="400" y2="230"/><polygon points="410,230 396,223 396,237"/>
+    <line x1="150" y1="230" x2="150" y2="20"/><polygon points="150,10 143,24 157,24"/>
+  </g>
+  <text x="412" y="222" fill="#C9473A" font-weight="bold">x (width)</text>
+  <text x="160" y="22" fill="#C9473A" font-weight="bold">z (depth)</text>
+  <circle cx="150" cy="230" r="6" fill="#4A3426"/>
+  <text x="142" y="250" text-anchor="end" fill="#4A3426">origin 0,0</text>
+  <text x="250" y="285" text-anchor="middle" fill="#4A3426">you stand here, in the street, looking at the front door · y points up from the lowest floor</text>
+</svg>

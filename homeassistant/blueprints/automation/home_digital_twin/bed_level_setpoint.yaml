@@ -1,0 +1,98 @@
+blueprint:
+  name: Bed-level setpoint (Home Digital Twin)
+  description: >
+    A wall-mounted heat pump measures the air near the ceiling. In tall rooms, attics or rooms under
+    a concrete roof that air is warmer than where you sleep, so the unit stops early. Every
+    5 minutes, for the units switched on by the surplus automation in heating mode, this raises the
+    unit's setpoint by the difference between its own sensor and a room sensor at bed height
+    (for example a smart radiator valve or a small thermometer), up to a maximum.
+  domain: automation
+  source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/bed_level_setpoint.yaml
+  input:
+    heat_pumps:
+      name: Heat pumps
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+    markers:
+      name: Marker booleans, same order
+      selector:
+        entity:
+          domain: input_boolean
+          multiple: true
+    room_sensors:
+      name: Room sensors at bed height, same order
+      description: A climate entity (its current temperature is used) or a temperature sensor per heat pump.
+      selector:
+        entity:
+          domain: [climate, sensor]
+          multiple: true
+    target:
+      name: Temperature wanted at bed height
+      default: 22
+      selector:
+        number:
+          min: 16
+          max: 26
+          step: 0.5
+          unit_of_measurement: "°C"
+    max_setpoint:
+      name: Highest setpoint allowed on the unit
+      default: 24
+      selector:
+        number:
+          min: 18
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: time_pattern
+    minutes: "/5"
+  - trigger: state
+    entity_id: !input markers
+    to: "on"
+    for:
+      minutes: 1
+
+variables:
+  heat_pumps: !input heat_pumps
+  markers: !input markers
+  room_sensors: !input room_sensors
+  wanted: !input target
+  max_setpoint: !input max_setpoint
+
+conditions:
+  - condition: template
+    value_template: "{{ heat_pumps | length == markers | length == room_sensors | length }}"
+
+actions:
+  - repeat:
+      for_each: "{{ range(heat_pumps | length) | list }}"
+      sequence:
+        - variables:
+            hp: "{{ heat_pumps[repeat.item] }}"
+            room: "{{ room_sensors[repeat.item] }}"
+            t_unit: "{{ state_attr(hp, 'current_temperature') | float(0) }}"
+            t_room: >
+              {{ (state_attr(room, 'current_temperature') if room.startswith('climate.') else states(room)) | float(0) }}
+            current: "{{ state_attr(hp, 'temperature') | float(0) }}"
+        - variables:
+            # round to 0.5 °C, never below the wanted temperature, never above the maximum
+            setpoint: >
+              {{ ((([[wanted + t_unit - t_room, wanted] | max, max_setpoint] | min) * 2) | round / 2)
+                 if t_unit > 0 and t_room > 0 else wanted }}
+        - if:
+            - condition: template
+              value_template: >
+                {{ is_state(markers[repeat.item], 'on') and is_state(hp, 'heat') and (setpoint - current) | abs >= 0.5 }}
+          then:
+            - action: climate.set_temperature
+              target:
+                entity_id: "{{ hp }}"
+              data:
+                temperature: "{{ setpoint }}"
