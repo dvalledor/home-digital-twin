@@ -1,0 +1,210 @@
+# Home Digital Twin: one room warm at a set time in the morning, with an early start that learns.
+#
+# Every day the room (for example the kitchen at breakfast) is at "Morning · Temperature" at
+# "Morning · Ready at", heated by its radiator, and handed back at "Morning · Switch off at".
+# From 04:30, every 5 minutes, it works out whether it must start now to arrive in time, using the
+# heating rate it has learned (°C per hour), with a 15-minute margin. When the room reaches the
+# temperature (or at the ready time) it measures how fast it really warmed up and updates the rate
+# (70 % old value, 30 % new). It only hands back the radiator if it switched it on.
+#
+# Install: copy to /config/packages/morning_preheat.yaml, replace every EDIT, check config, restart.
+#
+#   climate.kitchen_radiator   EDIT the radiator (smart valve / thermostat zone) of the room
+#   input_boolean.away_mode    EDIT your away-mode switch
+#
+# For a second room, copy the file, rename every "morning_" id and change the entity.
+
+input_boolean:
+  morning_on_by_routine:
+    name: "Morning · Radiator switched on by the routine"
+    icon: mdi:flag-outline
+  morning_learned_today:
+    name: "Morning · Learned today"
+    icon: mdi:school-outline
+
+input_datetime:
+  morning_ready_at:
+    name: "Morning · Ready at"
+    has_date: false
+    has_time: true
+    initial: "07:15"   # EDIT
+  morning_switch_off_at:
+    name: "Morning · Switch off at"
+    has_date: false
+    has_time: true
+    initial: "08:00"   # EDIT
+  # Written by the automation: when today's warm-up started.
+  morning_started_at:
+    name: "Morning · Started at"
+    has_date: true
+    has_time: true
+
+input_number:
+  morning_temperature:
+    name: "Morning · Temperature"
+    min: 15
+    max: 24
+    step: 0.5
+    initial: 20        # EDIT
+    unit_of_measurement: "°C"
+    mode: box
+  # Learned: no "initial", so it survives restarts. The seed automation sets 1.5 the first time.
+  morning_heating_rate:
+    name: "Morning · Heating rate (learned)"
+    min: 0.3
+    max: 6
+    step: 0.01
+    unit_of_measurement: "°C/h"
+    mode: box
+  morning_temperature_at_start:
+    name: "Morning · Temperature at start"
+    min: 0
+    max: 40
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+
+automation:
+  - id: home_digital_twin_morning_seed
+    alias: "Morning · Seed learned rate"
+    description: "The first time only: start the learned heating rate at 1.5 °C/h."
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_number.morning_heating_rate
+        state: "0.3"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.morning_heating_rate
+        data:
+          value: 1.5
+
+  - id: home_digital_twin_morning_preheat
+    alias: "Morning · Room ready in the morning"
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+        id: check
+      - trigger: time
+        at: input_datetime.morning_ready_at
+        id: check
+      - trigger: homeassistant
+        event: start
+        id: check
+      - trigger: time
+        at: input_datetime.morning_switch_off_at
+        id: stop
+      - trigger: state
+        entity_id: input_boolean.away_mode   # EDIT
+        to: "on"
+        id: stop
+    actions:
+      - variables:
+          radiator: climate.kitchen_radiator   # EDIT
+          t: "{{ state_attr(radiator, 'current_temperature') | float(0) }}"
+          target: "{{ states('input_number.morning_temperature') | float(20) }}"
+          rate: "{{ [states('input_number.morning_heating_rate') | float(1.5), 0.3] | max }}"
+          hours_to_ready: "{{ [(today_at(states('input_datetime.morning_ready_at')) - now()).total_seconds() / 3600, 0] | max }}"
+      - variables:
+          needed: "{{ t > 0 and (target - t) > 0.2 and hours_to_ready <= (target - t) / rate + 0.25 }}"
+      - choose:
+          - alias: "Switch-off time, away, or outside the morning window: hand back the radiator"
+            conditions:
+              - condition: or
+                conditions:
+                  - condition: trigger
+                    id: stop
+                  - condition: time
+                    after: input_datetime.morning_switch_off_at
+                    before: "04:30:00"
+            sequence:
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.morning_on_by_routine
+                    state: "on"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.morning_on_by_routine
+                  - action: climate.set_hvac_mode
+                    alias: "Back to the radiator's own schedule"
+                    target:
+                      entity_id: "{{ radiator }}"
+                    data:
+                      hvac_mode: auto
+          - alias: "On: reached the temperature or the ready time, learn the rate (once a day)"
+            conditions:
+              - condition: state
+                entity_id: input_boolean.morning_on_by_routine
+                state: "on"
+              - condition: state
+                entity_id: input_boolean.morning_learned_today
+                state: "off"
+              - condition: or
+                conditions:
+                  - condition: template
+                    value_template: "{{ t >= target - 0.1 }}"
+                  - condition: time
+                    after: input_datetime.morning_ready_at
+            sequence:
+              - variables:
+                  hours: "{{ (now().timestamp() - state_attr('input_datetime.morning_started_at', 'timestamp') | float(0)) / 3600 }}"
+                  rise: "{{ t - states('input_number.morning_temperature_at_start') | float(t) }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ 0.25 <= hours <= 4 and rise >= 0.3 }}"
+                then:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: input_number.morning_heating_rate
+                    data:
+                      value: "{{ ([[0.7 * rate + 0.3 * (rise / hours), 0.3] | max, 6] | min) | round(2) }}"
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.morning_learned_today
+          - alias: "Off and it would not arrive in time: start now"
+            conditions:
+              - condition: state
+                entity_id: input_boolean.morning_on_by_routine
+                state: "off"
+              - condition: state
+                entity_id: input_boolean.away_mode   # EDIT
+                state: "off"
+              - condition: time
+                after: "04:30:00"
+                before: input_datetime.morning_switch_off_at
+              - condition: template
+                value_template: "{{ needed }}"
+            sequence:
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.morning_temperature_at_start
+                data:
+                  value: "{{ t }}"
+              - action: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.morning_started_at
+                data:
+                  timestamp: "{{ now().timestamp() }}"
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.morning_learned_today
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.morning_on_by_routine
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ radiator }}"
+                data:
+                  hvac_mode: heat
+              - action: climate.set_temperature
+                target:
+                  entity_id: "{{ radiator }}"
+                data:
+                  temperature: "{{ target }}"

@@ -1,0 +1,156 @@
+blueprint:
+  name: Away mode for heating (Home Digital Twin)
+  description: >
+    One switch that every heating automation respects. It is switched on when everybody listed has
+    been away for some minutes and switched off when anybody comes back (you can also flip it by
+    hand, from an NFC tag at the door, or from your phone). When it goes on, the heat pumps are
+    switched off and the radiators are set to a frost-protection temperature. When it goes off, the
+    radiators go back to their own schedule ("auto"); the scheduled and surplus automations then
+    take over again by themselves.
+
+    Guide: https://github.com/dvalledor/home-digital-twin/blob/main/docs/automations.md
+  domain: automation
+  source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/away_mode.yaml
+  input:
+    away_switch:
+      name: Away mode switch
+      description: An input_boolean, for example input_boolean.away_mode.
+      selector:
+        entity:
+          domain: input_boolean
+    people:
+      name: People
+      selector:
+        entity:
+          domain: person
+          multiple: true
+    minutes_empty:
+      name: Minutes with nobody home before switching on
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: min
+    heat_pumps:
+      name: Heat pumps to switch off
+      default: []
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+    radiators:
+      name: Radiators to set to frost protection
+      default: []
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+    frost_temperature:
+      name: Frost-protection temperature
+      description: >
+        Some radiator integrations ignore "off" and fall back to their own schedule; a manual low
+        setpoint is a reliable way to keep them quiet.
+      default: 5
+      selector:
+        number:
+          min: 5
+          max: 16
+          step: 0.5
+          unit_of_measurement: "°C"
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input people
+    from: home
+    for:
+      minutes: !input minutes_empty
+    id: someone_left
+  - trigger: state
+    entity_id: !input people
+    to: home
+    id: someone_back
+  - trigger: state
+    entity_id: !input away_switch
+    from: "off"
+    to: "on"
+    id: away_on
+  - trigger: state
+    entity_id: !input away_switch
+    from: "on"
+    to: "off"
+    id: away_off
+
+variables:
+  away_switch: !input away_switch
+  people: !input people
+  heat_pumps: !input heat_pumps
+  radiators: !input radiators
+  frost: !input frost_temperature
+
+actions:
+  - choose:
+      - alias: "Nobody home any more: switch away mode on"
+        conditions:
+          - condition: template
+            value_template: >
+              {{ trigger.id == 'someone_left' and people | select('is_state', 'home') | list | length == 0
+                 and is_state(away_switch, 'off') }}
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ away_switch }}"
+      - alias: "Somebody is back: switch away mode off"
+        conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'someone_back' and is_state(away_switch, 'on') }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ away_switch }}"
+      - alias: "Away mode on: heat pumps off, radiators to frost protection"
+        conditions:
+          - condition: trigger
+            id: away_on
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ heat_pumps | length > 0 }}"
+            then:
+              - action: climate.turn_off
+                continue_on_error: true
+                target:
+                  entity_id: "{{ heat_pumps }}"
+          - repeat:
+              for_each: "{{ radiators }}"
+              sequence:
+                - action: climate.set_hvac_mode
+                  continue_on_error: true
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  data:
+                    hvac_mode: heat
+                - action: climate.set_temperature
+                  continue_on_error: true
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  data:
+                    temperature: "{{ frost }}"
+      - alias: "Away mode off: radiators back to their own schedule"
+        conditions:
+          - condition: trigger
+            id: away_off
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ radiators | length > 0 }}"
+            then:
+              - action: climate.set_hvac_mode
+                continue_on_error: true
+                target:
+                  entity_id: "{{ radiators }}"
+                data:
+                  hvac_mode: auto

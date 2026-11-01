@@ -1,0 +1,215 @@
+blueprint:
+  name: Heat pumps on a schedule (Home Digital Twin)
+  description: >
+    During a schedule (for example weekdays 16:00-20:00, when the family comes home) heats some
+    rooms with their heat pumps at a set temperature, even if that means using grid energy: heat
+    pumps are usually cheaper than a gas boiler or electric radiators. It only switches on a unit
+    that is off, so a unit already run by another automation (solar surplus, bedtime warm-up) is
+    left alone and taken over when that automation releases it. If somebody switches a unit off
+    by hand, it is forgotten until the schedule starts again. At the end of the schedule it switches
+    off only the units it switched on (marker booleans). With a room sensor at bed or sofa height,
+    the setpoint is compensated for the warmer air near the ceiling.
+
+    Guide: https://github.com/dvalledor/home-digital-twin/blob/main/docs/automations.md
+  domain: automation
+  source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/scheduled_heat_pumps.yaml
+  input:
+    schedule_entity:
+      name: Schedule
+      description: A schedule helper (Settings, Devices and services, Helpers, Schedule).
+      selector:
+        entity:
+          domain: schedule
+    heat_pumps:
+      name: Heat pumps
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+    markers:
+      name: Marker booleans, same order
+      description: One "switched on by this schedule" input_boolean per heat pump.
+      selector:
+        entity:
+          domain: input_boolean
+          multiple: true
+    room_sensors:
+      name: Room sensors, same order (optional)
+      description: >
+        A climate entity (smart radiator valve) or temperature sensor per heat pump. For a unit
+        without a separate sensor, pick the heat pump itself (no compensation). Leave the list
+        empty to use no compensation at all.
+      default: []
+      selector:
+        entity:
+          domain: [climate, sensor]
+          multiple: true
+    temperature_entity:
+      name: Temperature
+      description: An input_number with the temperature you want during the schedule (for example 19 °C).
+      selector:
+        entity:
+          domain: input_number
+    max_setpoint:
+      name: Highest setpoint allowed on the unit
+      default: 26
+      selector:
+        number:
+          min: 18
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+    other_markers:
+      name: Markers of other automations (optional)
+      description: >
+        When one of these goes off (for example the solar surplus markers), check again whether a
+        unit is free to be taken over.
+      default: []
+      selector:
+        entity:
+          domain: input_boolean
+          multiple: true
+    away_entity:
+      name: Away mode (optional)
+      description: While on, nothing is switched on and the units of this schedule are switched off.
+      default: []
+      selector:
+        entity:
+          domain: input_boolean
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input schedule_entity
+    to: "on"
+    id: start
+  - trigger: homeassistant
+    event: start
+    id: start
+  - trigger: state
+    entity_id: !input other_markers
+    from: "on"
+    to: "off"
+    for:
+      minutes: 1
+    id: start
+  - trigger: state
+    entity_id: !input away_entity
+    from: "on"
+    to: "off"
+    for:
+      minutes: 1
+    id: start
+  - trigger: state
+    entity_id: !input temperature_entity
+    id: adjust
+  - trigger: time_pattern
+    minutes: "/10"
+    id: adjust
+  - trigger: state
+    entity_id: !input schedule_entity
+    to: "off"
+    id: stop
+  - trigger: state
+    entity_id: !input away_entity
+    to: "on"
+    id: stop
+  - trigger: state
+    entity_id: !input heat_pumps
+    to: "off"
+    for:
+      seconds: 30
+    id: switched_off
+
+variables:
+  schedule_entity: !input schedule_entity
+  heat_pumps: !input heat_pumps
+  markers: !input markers
+  room_sensors: !input room_sensors
+  temperature_entity: !input temperature_entity
+  max_setpoint: !input max_setpoint
+  away_entity: !input away_entity
+
+conditions:
+  - condition: template
+    value_template: >
+      {{ heat_pumps | length == markers | length and heat_pumps | length > 0
+         and (room_sensors | length == 0 or room_sensors | length == heat_pumps | length) }}
+
+actions:
+  - variables:
+      off_schedule: >
+        {{ is_state(schedule_entity, 'off') or
+           (away_entity not in [none, '', []] and is_state(away_entity, 'on')) }}
+      wanted: "{{ states(temperature_entity) | float(19) }}"
+  - repeat:
+      for_each: "{{ range(heat_pumps | length) | list }}"
+      sequence:
+        - variables:
+            hp: "{{ heat_pumps[repeat.item] }}"
+            marker: "{{ markers[repeat.item] }}"
+            sensor: "{{ room_sensors[repeat.item] if room_sensors | length > 0 else hp }}"
+            t_unit: "{{ state_attr(hp, 'current_temperature') | float(0) }}"
+            t_room: >
+              {{ (state_attr(sensor, 'current_temperature') if sensor.startswith('climate.') else states(sensor)) | float(0) }}
+        - variables:
+            setpoint: >
+              {{ ((([[wanted + t_unit - t_room, wanted] | max, max_setpoint] | min) * 2) | round / 2)
+                 if (sensor != hp and t_unit > 0 and t_room > 0) else wanted }}
+            owned: "{{ is_state(marker, 'on') }}"
+        - choose:
+            - alias: "End of schedule or away: switch off what this automation switched on"
+              conditions:
+                - condition: template
+                  value_template: "{{ trigger.id == 'stop' or off_schedule }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: "{{ owned }}"
+                  then:
+                    - action: input_boolean.turn_off
+                      target:
+                        entity_id: "{{ marker }}"
+                    - action: climate.turn_off
+                      target:
+                        entity_id: "{{ hp }}"
+            - alias: "Somebody (or another automation) switched this unit off: forget it until the next start"
+              conditions:
+                - condition: template
+                  value_template: "{{ trigger.id == 'switched_off' and trigger.entity_id == hp and owned }}"
+              sequence:
+                - action: input_boolean.turn_off
+                  target:
+                    entity_id: "{{ marker }}"
+            - alias: "Start: the unit is free, switch it on in heating mode"
+              conditions:
+                - condition: template
+                  value_template: "{{ trigger.id == 'start' and is_state(hp, 'off') }}"
+              sequence:
+                - action: input_boolean.turn_on
+                  target:
+                    entity_id: "{{ marker }}"
+                # mode first, then setpoint: some integrations ignore hvac_mode inside set_temperature
+                - action: climate.set_hvac_mode
+                  target:
+                    entity_id: "{{ hp }}"
+                  data:
+                    hvac_mode: heat
+                - action: climate.set_temperature
+                  target:
+                    entity_id: "{{ hp }}"
+                  data:
+                    temperature: "{{ setpoint }}"
+            - alias: "Owned by this automation: keep the setpoint up to date"
+              conditions:
+                - condition: template
+                  value_template: >
+                    {{ owned and is_state(hp, 'heat') and (setpoint - state_attr(hp, 'temperature') | float(0)) | abs >= 0.5 }}
+              sequence:
+                - action: climate.set_temperature
+                  target:
+                    entity_id: "{{ hp }}"
+                  data:
+                    temperature: "{{ setpoint }}"

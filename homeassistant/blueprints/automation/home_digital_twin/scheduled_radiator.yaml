@@ -1,0 +1,142 @@
+blueprint:
+  name: Radiator on a schedule (Home Digital Twin)
+  description: >
+    Heats one room with its radiator (a smart radiator valve or thermostat zone) during a schedule,
+    for example the bedrooms at night, when there is no sun and heat pumps are noisy. During the
+    schedule the radiator is set to heating mode at the temperature of an input_number. When the
+    schedule ends it hands the radiator back (to its own schedule, "auto", or off), but only if this
+    automation had set it (marker boolean). Use one automation per radiator.
+
+    Tip: do the daytime heating with heat pumps and solar surplus, and switch off the radiators'
+    own schedule, so that Home Assistant decides when each source runs.
+
+    Guide: https://github.com/dvalledor/home-digital-twin/blob/main/docs/automations.md
+  domain: automation
+  source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/scheduled_radiator.yaml
+  input:
+    radiator:
+      name: Radiator
+      selector:
+        entity:
+          domain: climate
+    schedule_entity:
+      name: Schedule
+      selector:
+        entity:
+          domain: schedule
+    temperature_entity:
+      name: Temperature
+      description: An input_number with the temperature wanted during the schedule (for example 18 or 21 °C).
+      selector:
+        entity:
+          domain: input_number
+    marker:
+      name: Marker boolean
+      description: An input_boolean "radiator set by this schedule".
+      selector:
+        entity:
+          domain: input_boolean
+    end_mode:
+      name: At the end of the schedule
+      default: auto
+      selector:
+        select:
+          options:
+            - label: Back to the radiator's own schedule (auto)
+              value: auto
+            - label: Switch off
+              value: "off"
+    away_entity:
+      name: Away mode (optional)
+      description: While on, this automation does nothing (your away routine looks after the radiators).
+      default: []
+      selector:
+        entity:
+          domain: input_boolean
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input schedule_entity
+    to: "on"
+  # wait 2 minutes so that a schedule that ends at 23:59 and starts again at 00:00 is ignored
+  - trigger: state
+    entity_id: !input schedule_entity
+    to: "off"
+    for:
+      minutes: 2
+  - trigger: state
+    entity_id: !input temperature_entity
+  - trigger: homeassistant
+    event: start
+  - trigger: state
+    entity_id: !input away_entity
+    from: "on"
+    to: "off"
+    for:
+      minutes: 1
+  - trigger: state
+    entity_id: !input away_entity
+    to: "on"
+    id: away
+
+variables:
+  radiator: !input radiator
+  schedule_entity: !input schedule_entity
+  temperature_entity: !input temperature_entity
+  marker: !input marker
+  end_mode: !input end_mode
+  away_entity: !input away_entity
+
+actions:
+  - variables:
+      away: "{{ away_entity not in [none, '', []] and is_state(away_entity, 'on') }}"
+      in_schedule: "{{ is_state(schedule_entity, 'on') }}"
+      wanted: "{{ states(temperature_entity) | float(18) }}"
+  - choose:
+      - alias: "Away: the away routine owns the radiators, just forget the marker"
+        conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'away' or away }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ marker }}"
+      - alias: "In schedule: radiator at its temperature"
+        conditions:
+          - condition: template
+            value_template: "{{ in_schedule }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: >
+                  {{ not (is_state(radiator, 'heat') and (state_attr(radiator, 'temperature') | float(0) - wanted) | abs < 0.25) }}
+            then:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ radiator }}"
+                data:
+                  hvac_mode: heat
+              - action: climate.set_temperature
+                target:
+                  entity_id: "{{ radiator }}"
+                data:
+                  temperature: "{{ wanted }}"
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ marker }}"
+      - alias: "Out of schedule: hand back the radiator, only if this automation set it"
+        conditions:
+          - condition: template
+            value_template: "{{ not in_schedule and is_state(marker, 'on') }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ marker }}"
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: "{{ radiator }}"
+            data:
+              hvac_mode: "{{ end_mode }}"

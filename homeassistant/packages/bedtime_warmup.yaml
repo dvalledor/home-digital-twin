@@ -1,0 +1,450 @@
+# Home Digital Twin: a bedroom at the right temperature at bedtime, with the heat pump, just in time.
+#
+# Goal: at bedtime (for example 20:00 for young children) the bed area of one bedroom is at a set
+# temperature, heated by its heat pump and not by the gas radiator. During the day the solar surplus
+# automation pre-heats the room with free energy, aiming at "Bedtime · Pre-heating target" (use it
+# as the target sensor in the bed-level setpoint blueprint). When the useful sun ends, every 5
+# minutes this predicts the temperature at bedtime from how fast the room cools (learned every
+# night, corrected by the weather forecast) and switches the heat pump on only when needed, as late
+# as possible. At "Switch off at" it switches the unit off, if it had switched it on.
+#
+# Install: copy to /config/packages/bedtime_warmup.yaml, replace every EDIT, check config, restart.
+# Needs packages/home_digital_twin.yaml (useful sun sensor and surplus markers).
+#
+#   climate.bedroom_heat_pump            EDIT the heat pump of the bedroom
+#   climate.bedroom_radiator             EDIT a sensor at bed height: smart radiator valve (climate)
+#                                        or replace state_attr(..., 'current_temperature') by states()
+#   weather.home                         EDIT your weather entity (hourly forecast)
+#   input_boolean.surplus_hp_1_on_by_surplus   EDIT the surplus marker of this heat pump
+#   input_boolean.daytime_bedroom_on_by_schedule  EDIT the marker of "Heat pumps on a schedule" for
+#                                        this unit, or delete the lines that use it
+#   input_boolean.away_mode              EDIT your away-mode switch
+#   sensor.bedroom_radiator_heating_power  EDIT heating demand of the radiator (%), used to skip
+#                                        learning on nights the radiator ran; delete the condition
+#                                        if you have no such sensor
+
+input_boolean:
+  bedtime_enable:
+    name: "Bedtime · Enable"
+    icon: mdi:bed-clock
+  bedtime_on_by_routine:
+    name: "Bedtime · Heat pump switched on by the routine"
+    icon: mdi:flag-outline
+  bedtime_switched_off_by_hand_today:
+    name: "Bedtime · Switched off by hand today"
+    icon: mdi:hand-back-left-outline
+
+input_datetime:
+  bedtime_time:
+    name: "Bedtime · Bedtime"
+    has_date: false
+    has_time: true
+    initial: "20:00"   # EDIT: when the room must be at temperature
+  bedtime_switch_off_at:
+    name: "Bedtime · Switch heat pump off at"
+    has_date: false
+    has_time: true
+    initial: "20:00"   # EDIT: often the same as bedtime; the room keeps its heat for a while
+
+input_number:
+  bedtime_temperature:
+    name: "Bedtime · Temperature at bedtime"
+    min: 17
+    max: 24
+    step: 0.5
+    initial: 21
+    unit_of_measurement: "°C"
+    mode: box
+  bedtime_heating_rate:
+    name: "Bedtime · Heating rate with the heat pump"
+    min: 0.3
+    max: 6
+    step: 0.1
+    initial: 1.5       # °C per hour at bed height; measure it once with the unit at full power
+    unit_of_measurement: "°C/h"
+    mode: box
+  bedtime_outdoor_losses:
+    name: "Bedtime · Losses to outdoors"
+    min: 0
+    max: 0.2
+    step: 0.005
+    initial: 0.03      # °C per hour lost per °C of difference with outdoors
+    unit_of_measurement: "°C/h/°C"
+    mode: box
+  # Learned values: no "initial", so Home Assistant keeps them across restarts.
+  # The seed automation below gives them a starting value the first time.
+  bedtime_internal_cooling:
+    name: "Bedtime · Internal cooling (learned)"
+    min: 0.04
+    max: 1
+    step: 0.01
+    unit_of_measurement: "°C/h"
+    mode: box
+  bedtime_outdoor_forecast:
+    name: "Bedtime · Outdoor forecast until bedtime"
+    min: -30
+    max: 50
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+  bedtime_temperature_at_sun_end:
+    name: "Bedtime · Room temperature when the useful sun ended"
+    min: 0
+    max: 40
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+
+template:
+  - sensor:
+      # °C per hour the room will lose this evening without heating: heat that goes to the rest of
+      # the house (learned) plus losses to outdoors according to the forecast.
+      - name: "Bedtime · Cooling forecast"
+        unique_id: home_digital_twin_bedtime_cooling_forecast
+        unit_of_measurement: "°C/h"
+        state_class: measurement
+        icon: mdi:thermometer-chevron-down
+        state: >
+          {% set base = states('input_number.bedtime_internal_cooling') | float(0.32) %}
+          {% set kext = states('input_number.bedtime_outdoor_losses') | float(0.03) %}
+          {% set ext = states('input_number.bedtime_outdoor_forecast') | float(15) %}
+          {% set t_ref = states('input_number.bedtime_temperature') | float(21) + 0.7 %}
+          {{ (base + kext * ([t_ref - ext, 0] | max)) | round(2) }}
+
+      # Bed-level temperature to reach with the sun so that, cooling down, the room is at the
+      # bedtime temperature without spending battery. Use it in the bed-level setpoint blueprint.
+      - name: "Bedtime · Pre-heating target"
+        unique_id: home_digital_twin_bedtime_pre_heating_target
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        state: >
+          {% set target = states('input_number.bedtime_temperature') | float(21) %}
+          {% set k = states('sensor.bedtime_cooling_forecast') | float(0.35) %}
+          {% set sunset = as_datetime(state_attr('sun.sun', 'next_setting')) %}
+          {% set end = sunset - timedelta(minutes=states('input_number.surplus_useful_sun_ends_before_sunset') | float(80)) %}
+          {% set bed = today_at(states('input_datetime.bedtime_time')) %}
+          {% set h = [(bed - end).total_seconds() / 3600, 0] | max %}
+          {{ [[target + k * h + 0.3, 22] | max, 23] | min | round(1) }}
+        availability: "{{ state_attr('sun.sun', 'next_setting') is not none }}"
+
+      # Temperature at bed height at bedtime if nothing is switched on.
+      - name: "Bedtime · Predicted temperature at bedtime"
+        unique_id: home_digital_twin_bedtime_predicted_temperature
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        state: >
+          {% set t = state_attr('climate.bedroom_radiator', 'current_temperature') | float(0) %}  {# EDIT #}
+          {% set k = states('sensor.bedtime_cooling_forecast') | float(0.35) %}
+          {% set h = [(today_at(states('input_datetime.bedtime_time')) - now()).total_seconds() / 3600, 0] | max %}
+          {{ (t - k * h) | round(1) }}
+        availability: "{{ state_attr('climate.bedroom_radiator', 'current_temperature') is number }}"  # EDIT
+
+automation:
+  - id: home_digital_twin_bedtime_seed
+    alias: "Bedtime · Seed learned values"
+    description: "The first time only: give the learned helpers a sensible starting value."
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - if:
+          - condition: state
+            entity_id: input_number.bedtime_internal_cooling
+            state: "0.04"
+        then:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bedtime_internal_cooling
+            data:
+              value: 0.32
+      - if:
+          - condition: state
+            entity_id: input_number.bedtime_outdoor_forecast
+            state: "-30.0"
+        then:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bedtime_outdoor_forecast
+            data:
+              value: 15
+
+  - id: home_digital_twin_bedtime_forecast
+    alias: "Bedtime · Outdoor forecast for the evening"
+    description: >
+      Every hour while the sun is up, average the hourly forecast between the end of the useful sun
+      and bedtime. After sunset the value stays frozen: it belongs to the evening being measured.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: time_pattern
+        hours: "/1"
+        minutes: 7
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: binary_sensor.surplus_useful_sun
+        to: "off"
+      - trigger: state
+        entity_id: input_datetime.bedtime_time
+    conditions:
+      - condition: state
+        entity_id: sun.sun
+        state: above_horizon
+    actions:
+      - action: weather.get_forecasts
+        target:
+          entity_id: weather.home   # EDIT
+        data:
+          type: hourly
+        response_variable: forecast
+      - variables:
+          average: >
+            {% set end = as_datetime(state_attr('sun.sun', 'next_setting'))
+               - timedelta(minutes=states('input_number.surplus_useful_sun_ends_before_sunset') | float(80)) %}
+            {% set bed = today_at(states('input_datetime.bedtime_time')) %}
+            {% set ns = namespace(s=0, n=0) %}
+            {% for h in (forecast.values() | first).forecast %}
+              {% set dt = as_datetime(h.datetime) %}
+              {% if dt + timedelta(hours=1) > end and dt < bed and h.temperature is number %}
+                {% set ns.s = ns.s + h.temperature %}{% set ns.n = ns.n + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ (ns.s / ns.n) | round(1) if ns.n > 0 else none }}
+      - condition: template
+        value_template: "{{ average is number }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bedtime_outdoor_forecast
+        data:
+          value: "{{ [[average, -30] | max, 50] | min }}"
+
+  - id: home_digital_twin_bedtime_learn
+    alias: "Bedtime · Learn how fast the room cools"
+    description: >
+      When the useful sun ends, store the room temperature. At bedtime, if neither the heat pump nor
+      the radiator ran in between, measure how much it really cooled, remove the part explained by
+      the outdoor temperature and update the internal cooling (70 % old value, 30 % measured).
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.surplus_useful_sun
+        to: "off"
+        id: begin
+      - trigger: time
+        at: input_datetime.bedtime_time
+        id: measure
+    actions:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: begin
+            sequence:
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.bedtime_temperature_at_sun_end
+                data:
+                  value: "{{ state_attr('climate.bedroom_radiator', 'current_temperature') | float(0) }}"  # EDIT
+          - conditions:
+              - condition: trigger
+                id: measure
+              - condition: state
+                entity_id: binary_sensor.surplus_useful_sun
+                state: "off"
+              - condition: numeric_state
+                entity_id: input_number.bedtime_temperature_at_sun_end
+                above: 10
+              - condition: numeric_state
+                entity_id: sensor.bedroom_radiator_heating_power   # EDIT or delete this condition
+                below: 1
+              - alias: "At least 2 hours, heat pump off the whole time, start value from this evening"
+                condition: template
+                value_template: >
+                  {% set since = states.binary_sensor.surplus_useful_sun.last_changed %}
+                  {{ (now() - since).total_seconds() > 7200
+                     and is_state('climate.bedroom_heat_pump', 'off')
+                     and states.climate.bedroom_heat_pump.last_changed < since + timedelta(minutes=5)
+                     and states.input_number.bedtime_temperature_at_sun_end.last_changed >= since - timedelta(minutes=1) }}
+            sequence:
+              - variables:
+                  old: "{{ states('input_number.bedtime_internal_cooling') | float(0.32) }}"
+                  ext: "{{ states('input_number.bedtime_outdoor_forecast') | float(15) }}"
+                  kext: "{{ states('input_number.bedtime_outdoor_losses') | float(0.03) }}"
+                  hours: "{{ (now() - states.binary_sensor.surplus_useful_sun.last_changed).total_seconds() / 3600 }}"
+                  t_start: "{{ states('input_number.bedtime_temperature_at_sun_end') | float(0) }}"
+                  t_end: "{{ state_attr('climate.bedroom_radiator', 'current_temperature') | float(0) }}"  # EDIT
+              - variables:
+                  measured: "{{ (t_start - t_end) / hours - kext * ([(t_start + t_end) / 2 - ext, 0] | max) }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.bedtime_internal_cooling
+                data:
+                  value: "{{ [[0.7 * old + 0.3 * measured, 0.05] | max, 1.0] | min | round(2) }}"
+
+  - id: home_digital_twin_bedtime_switched_off_by_hand
+    alias: "Bedtime · Detect switch-off by hand"
+    description: >
+      The routine always clears its marker before switching the unit off, so if the unit goes off
+      while the marker is still on, somebody switched it off: do not switch it on again tonight.
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: climate.bedroom_heat_pump   # EDIT
+        to: "off"
+    actions:
+      - if:
+          - condition: state
+            entity_id: input_boolean.bedtime_on_by_routine
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.away_mode   # EDIT
+            state: "off"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.bedtime_switched_off_by_hand_today
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.bedtime_on_by_routine
+
+  - id: home_digital_twin_bedtime_warmup
+    alias: "Bedtime · Room at temperature for bedtime"
+    description: >
+      After the useful sun ends, every 5 minutes: predict the temperature at bedtime and, only if it
+      will fall short, switch the heat pump on just in time (based on its heating rate). Keep it until
+      "Switch heat pump off at", then switch it off. Takes the unit over from the surplus or the
+      scheduled automation when needed. Does nothing while away or while "Enable" is off.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: state
+        entity_id: binary_sensor.surplus_useful_sun
+        to: "off"
+        for:
+          minutes: 1
+      - trigger: time
+        at: input_datetime.bedtime_switch_off_at
+      - trigger: state
+        entity_id:
+          - input_boolean.bedtime_enable
+          - input_boolean.away_mode   # EDIT
+      - trigger: time
+        at: "12:02:00"
+        id: midday_reset
+    actions:
+      - variables:
+          t_bed: "{{ state_attr('climate.bedroom_radiator', 'current_temperature') | float(0) }}"  # EDIT
+          t_unit: "{{ state_attr('climate.bedroom_heat_pump', 'current_temperature') | float(0) }}"
+          target: "{{ states('input_number.bedtime_temperature') | float(21) }}"
+          cooling: "{{ states('sensor.bedtime_cooling_forecast') | float(0.35) }}"
+          rate: "{{ states('input_number.bedtime_heating_rate') | float(1.5) }}"
+          hours_to_bed: "{{ [(today_at(states('input_datetime.bedtime_time')) - now()).total_seconds() / 3600, 0] | max }}"
+      - variables:
+          deficit: "{{ target + 0.2 - (t_bed - cooling * hours_to_bed) }}"
+          # the unit measures warmer air near the ceiling: raise its setpoint by the difference
+          setpoint: >
+            {{ ((([[target + 0.3 + t_unit - t_bed, target] | max, 26] | min) * 2) | round / 2)
+               if t_unit > 0 and t_bed > 0 else target }}
+      - variables:
+          needed: "{{ t_bed > 0 and deficit > 0 and hours_to_bed <= deficit / rate + 0.25 }}"
+      - choose:
+          - alias: "Midday: clear the switched-off-by-hand flag"
+            conditions:
+              - condition: trigger
+                id: midday_reset
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.bedtime_switched_off_by_hand_today
+          - alias: "Disabled, away or past switch-off time: switch off what the routine switched on"
+            conditions:
+              - condition: or
+                conditions:
+                  - condition: state
+                    entity_id: input_boolean.bedtime_enable
+                    state: "off"
+                  - condition: state
+                    entity_id: input_boolean.away_mode   # EDIT
+                    state: "on"
+                  - condition: time
+                    after: input_datetime.bedtime_switch_off_at
+                    before: "06:00:00"
+            sequence:
+              - if:
+                  - condition: state
+                    entity_id: input_boolean.bedtime_on_by_routine
+                    state: "on"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.bedtime_on_by_routine
+                  - action: climate.turn_off
+                    target:
+                      entity_id: climate.bedroom_heat_pump   # EDIT
+          - alias: "Already on by the routine: keep the setpoint right"
+            conditions:
+              - condition: state
+                entity_id: input_boolean.bedtime_on_by_routine
+                state: "on"
+              - condition: state
+                entity_id: climate.bedroom_heat_pump   # EDIT
+                state: heat
+              - condition: template
+                value_template: "{{ (setpoint - state_attr('climate.bedroom_heat_pump', 'temperature') | float(0)) | abs >= 0.5 }}"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.bedroom_heat_pump   # EDIT
+                data:
+                  temperature: "{{ setpoint }}"
+          - alias: "No useful sun and the forecast falls short: switch on just in time"
+            conditions:
+              - condition: state
+                entity_id: input_boolean.bedtime_switched_off_by_hand_today
+                state: "off"
+              - condition: state
+                entity_id: binary_sensor.surplus_useful_sun
+                state: "off"
+              - condition: time
+                after: "12:00:00"
+                before: input_datetime.bedtime_switch_off_at
+              - condition: state
+                entity_id: input_boolean.bedtime_on_by_routine
+                state: "off"
+              - alias: "The unit is free, or another automation has it"
+                condition: or
+                conditions:
+                  - condition: state
+                    entity_id: climate.bedroom_heat_pump   # EDIT
+                    state: "off"
+                  - condition: state
+                    entity_id: input_boolean.surplus_hp_1_on_by_surplus   # EDIT
+                    state: "on"
+                  - condition: state
+                    entity_id: input_boolean.daytime_bedroom_on_by_schedule   # EDIT or delete
+                    state: "on"
+              - condition: template
+                value_template: "{{ needed }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id:
+                    - input_boolean.surplus_hp_1_on_by_surplus   # EDIT
+                    - input_boolean.daytime_bedroom_on_by_schedule   # EDIT or delete
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.bedtime_on_by_routine
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.bedroom_heat_pump   # EDIT
+                data:
+                  hvac_mode: heat
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.bedroom_heat_pump   # EDIT
+                data:
+                  temperature: "{{ setpoint }}"

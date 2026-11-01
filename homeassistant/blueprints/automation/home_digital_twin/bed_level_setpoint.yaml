@@ -5,7 +5,9 @@ blueprint:
     a concrete roof that air is warmer than where you sleep, so the unit stops early. Every
     5 minutes, for the units switched on by the surplus automation in heating mode, this raises the
     unit's setpoint by the difference between its own sensor and a room sensor at bed height
-    (for example a smart radiator valve or a small thermometer), up to a maximum.
+    (for example a smart radiator valve or a small thermometer), up to a maximum. When it is warm
+    outdoors it does not raise anything. A room can take its bed-level target from a sensor, for
+    example the pre-heating target of the bedtime warm-up package.
   domain: automation
   source_url: https://github.com/dvalledor/home-digital-twin/blob/main/homeassistant/blueprints/automation/home_digital_twin/bed_level_setpoint.yaml
   input:
@@ -37,6 +39,30 @@ blueprint:
           max: 26
           step: 0.5
           unit_of_measurement: "°C"
+    target_sensors:
+      name: Target sensors, same order (optional)
+      description: >
+        A sensor per heat pump whose value replaces the fixed temperature above for that room
+        (for example sensor.bedtime_pre_heating_target). For a room that should use the fixed
+        temperature, pick any sensor that is not a number, or leave the whole list empty.
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          multiple: true
+    outdoor_entity:
+      name: Outdoor temperature (optional)
+      description: A weather entity or an outdoor sensor. Above the threshold the setpoint stays at the target.
+      default: []
+      selector:
+        entity:
+          domain: [weather, sensor]
+    no_heating_above:
+      name: Do not compensate if outdoors is above
+      default: input_number.surplus_no_heating_above_outdoor
+      selector:
+        entity:
+          domain: input_number
     max_setpoint:
       name: Highest setpoint allowed on the unit
       default: 24
@@ -65,12 +91,23 @@ variables:
   room_sensors: !input room_sensors
   wanted: !input target
   max_setpoint: !input max_setpoint
+  target_sensors: !input target_sensors
+  outdoor_entity: !input outdoor_entity
+  no_heating_above_entity: !input no_heating_above
 
 conditions:
   - condition: template
-    value_template: "{{ heat_pumps | length == markers | length == room_sensors | length }}"
+    value_template: >
+      {{ heat_pumps | length == markers | length == room_sensors | length
+         and (target_sensors | length == 0 or target_sensors | length == heat_pumps | length) }}
 
 actions:
+  - variables:
+      outdoor: >
+        {% if outdoor_entity in [none, '', []] %}none
+        {% elif outdoor_entity.startswith('weather.') %}{{ state_attr(outdoor_entity, 'temperature') }}
+        {% else %}{{ states(outdoor_entity) | float(none) }}{% endif %}
+      warm_outdoors: "{{ outdoor is number and outdoor >= states(no_heating_above_entity) | float(20) }}"
   - repeat:
       for_each: "{{ range(heat_pumps | length) | list }}"
       sequence:
@@ -81,11 +118,15 @@ actions:
             t_room: >
               {{ (state_attr(room, 'current_temperature') if room.startswith('climate.') else states(room)) | float(0) }}
             current: "{{ state_attr(hp, 'temperature') | float(0) }}"
+            base: >
+              {% set t = states(target_sensors[repeat.item]) if target_sensors | length > repeat.item else none %}
+              {{ t | float(wanted) if t is not none else wanted }}
         - variables:
-            # round to 0.5 °C, never below the wanted temperature, never above the maximum
+            # round to 0.5 °C; with a target sensor the room's own target is used, never below the wanted temperature, never above the maximum
             setpoint: >
-              {{ ((([[wanted + t_unit - t_room, wanted] | max, max_setpoint] | min) * 2) | round / 2)
-                 if t_unit > 0 and t_room > 0 else wanted }}
+              {{ base if warm_outdoors else
+                 (((([[base + t_unit - t_room, base] | max, max_setpoint] | min) * 2) | round / 2)
+                  if t_unit > 0 and t_room > 0 else base) }}
         - if:
             - condition: template
               value_template: >

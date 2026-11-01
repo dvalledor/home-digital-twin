@@ -80,11 +80,12 @@ You do not need all of them; the twin works with whatever you have.
 
 Follow [automations.md](automations.md). The short version:
 
-1. Copy `homeassistant/packages/home_digital_twin.yaml` into `/config/packages/`, edit the three marked entity ids and restart.
-2. Import the three blueprints and create one automation from each, listing your heat pumps in priority order.
-3. Switch on **Surplus · Heat with solar surplus**.
+1. Copy `homeassistant/packages/home_digital_twin.yaml` into `/config/packages/`, edit the marked entity ids and the hourly consumption profile, and restart.
+2. Import the blueprints and create an automation from each one you need: away mode, surplus heating (your heat pumps in priority order), marker cleanup and, optionally, bed-level setpoint, heat pumps on a schedule and radiators on a schedule.
+3. Optionally add the bedtime warm-up and morning pre-heat packages.
+4. Switch on **Surplus · Heat with solar surplus**.
 
-The logic only spends energy the forecast says will come back before sunset, never switches off a unit someone else switched on, and leaves at least 10 minutes between steps so the compressors are not cycled.
+The logic only spends energy the forecast says will come back before the useful sun ends, does not heat when it is warm outdoors, never switches off a unit someone else switched on, and leaves at least 10 minutes between steps so the compressors are not cycled.
 
 ## 6. Calibrate and measure
 
@@ -101,7 +102,9 @@ The logic only spends energy the forecast says will come back before sunset, nev
 | The compass points the wrong way | Check `backFacadeAzimuthDeg`: it is where the **back** facade looks. See [orientation.md](orientation.md). |
 | Live mode: "Could not read Home Assistant" | Host the viewer in `/config/www` so it is on the same origin, check the token, see [home-assistant.md](home-assistant.md). |
 | A heat pump never switches on | Check that the battery level sensor really reaches the "full" threshold, that the grid sensor sign is right (export positive or negative) and that the unit has been off for 45 minutes. Automation traces show which condition failed. |
-| The battery is empty at night | Lower the forecast correction factor, raise the house base load or the lowest battery level. |
+| The battery is empty at night | Lower the forecast correction factor, raise the house consumption scale or the lowest battery level, or end the useful sun earlier. |
+| A helper went back to its old value after a restart | Values with `initial` in a package are reset at every restart: change them in the file. |
+| The bedroom is cold at bedtime | Check **Bedtime · Predicted temperature at bedtime** during the afternoon and raise **Bedtime · Losses to outdoors** or lower **Bedtime · Heating rate**. |
 
 ## Safety and rules
 

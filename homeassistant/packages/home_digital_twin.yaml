@@ -5,12 +5,12 @@
 #        homeassistant:
 #          packages: !include_dir_named packages
 #   2. Copy this file to /config/packages/home_digital_twin.yaml
-#   3. Replace the three entity ids marked EDIT below with yours
+#   3. Replace the entity ids marked EDIT below with yours
 #      (search for "EDIT"), then Developer tools > YAML > Check configuration and restart.
 #   4. Import the blueprints in ../blueprints/automation/home_digital_twin/ and create
 #      one automation from each (see docs/automations.md).
 #
-# Nothing in this file switches a device on by itself: it only creates helpers and two sensors.
+# Nothing in this file switches a device on by itself: it only creates helpers and sensors.
 # The A/B test automation at the bottom starts disabled.
 
 input_boolean:
@@ -40,13 +40,12 @@ input_number:
     step: 0.05
     initial: 0.65   # start here; tune with docs/automations.md (real production / forecast)
     mode: box
-  surplus_house_base_load:
-    name: "Surplus · House base load"
-    min: 0
-    max: 3
+  surplus_consumption_scale:
+    name: "Surplus · House consumption scale"
+    min: 0.2
+    max: 4
     step: 0.05
-    initial: 0.4
-    unit_of_measurement: kW
+    initial: 1.0    # multiplies the hourly profile below; 1.2 = your house uses 20 % more
     mode: box
   surplus_battery_min_soc:
     name: "Surplus · Lowest battery level"
@@ -63,11 +62,64 @@ input_number:
     step: 0.001
     initial: 0.05   # usable capacity / 100, e.g. 5 kWh battery = 0.05
     mode: box
+  surplus_useful_sun_ends_before_sunset:
+    name: "Surplus · Useful sun ends before sunset"
+    min: 0
+    max: 180
+    step: 5
+    initial: 80     # in the last hour or so before sunset most roofs produce almost nothing
+    unit_of_measurement: min
+    mode: box
+  surplus_no_heating_above_outdoor:
+    name: "Surplus · Do not heat if outdoors is above"
+    min: 10
+    max: 30
+    step: 0.5
+    initial: 20
+    unit_of_measurement: "°C"
+    mode: box
 
 template:
+  - binary_sensor:
+      # On while the panels really produce: the sun is up and sunset is more than N minutes away.
+      # From then on the battery should be full and nothing should spend it on heating.
+      - name: "Surplus · Useful sun"
+        unique_id: home_digital_twin_surplus_useful_sun
+        icon: mdi:weather-sunny
+        state: >
+          {% set sunset = state_attr('sun.sun', 'next_setting') %}
+          {{ is_state('sun.sun', 'above_horizon') and sunset is not none and
+             (as_datetime(sunset) - now()).total_seconds()
+               > states('input_number.surplus_useful_sun_ends_before_sunset') | float(80) * 60 }}
+
   - sensor:
-      # Lowest battery level we can go down to and still be refilled by the sun before sunset,
-      # using the corrected forecast of the energy still to come today and the house base load.
+      # Expected house consumption (without heat pumps) from now until the useful sun ends.
+      # EDIT the 24 values: your average consumption in kW for each hour of the day (0 to 23),
+      # without heating or cooling. The Energy dashboard of a few autumn days is enough.
+      - name: "Surplus · House consumption until useful sun ends"
+        unique_id: home_digital_twin_surplus_consumption_until_end
+        unit_of_measurement: kWh
+        state_class: measurement
+        icon: mdi:home-lightning-bolt-outline
+        state: >
+          {% set profile = [0.15,0.15,0.15,0.15,0.15,0.15,0.2,0.35,0.35,0.25,0.2,0.2,
+                            0.2,0.25,0.3,0.3,0.35,0.45,0.5,0.6,0.6,0.5,0.35,0.2] %}
+          {% set sunset = state_attr('sun.sun', 'next_setting') %}
+          {% set end = as_datetime(sunset) - timedelta(minutes=states('input_number.surplus_useful_sun_ends_before_sunset') | float(80)) if sunset else now() %}
+          {% set ns = namespace(e=0, t=now()) %}
+          {% for i in range(30) %}
+            {% if ns.t < end %}
+              {% set next_hour = ns.t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1) %}
+              {% set stop = [next_hour, end] | min %}
+              {% set ns.e = ns.e + profile[ns.t.hour] * (stop - ns.t).total_seconds() / 3600 %}
+              {% set ns.t = stop %}
+            {% endif %}
+          {% endfor %}
+          {{ (ns.e * states('input_number.surplus_consumption_scale') | float(1)) | round(2) }}
+
+      # Lowest battery level we can go down to and still be refilled by the sun before the useful
+      # sun ends, using the corrected forecast of the energy still to come today, the expected
+      # house consumption, a 0.5 kWh cushion and 5 % charging losses. Without useful sun: 100.
       - name: "Surplus · Dynamic battery floor"
         unique_id: home_digital_twin_surplus_dynamic_floor
         unit_of_measurement: "%"
@@ -76,13 +128,13 @@ template:
         state: >
           {% set remaining = states('sensor.energy_production_today_remaining') | float(0) %}  {# EDIT: solar forecast, kWh still to come today #}
           {% set factor = states('input_number.surplus_forecast_correction') | float(0.65) %}
-          {% set base = states('input_number.surplus_house_base_load') | float(0.4) %}
+          {% set load = states('sensor.surplus_house_consumption_until_useful_sun_ends') | float(0) %}
           {% set min_soc = states('input_number.surplus_battery_min_soc') | float(30) %}
           {% set per_pct = states('input_number.surplus_battery_kwh_per_percent') | float(0.05) %}
-          {% set sunset = state_attr('sun.sun', 'next_setting') %}
-          {% set hours = ((as_datetime(sunset) - now()).total_seconds() / 3600) if sunset else 24 %}
-          {% set recoverable = remaining * factor - base * ([hours, 0] | max) - 0.5 %}
-          {{ [[100 - recoverable / per_pct, min_soc] | max, 100] | min | round(0) }}
+          {% if is_state('binary_sensor.surplus_useful_sun', 'on') %}
+            {% set recoverable = (remaining * factor - load - 0.5) * 0.95 %}
+            {{ [[100 - recoverable / per_pct, min_soc] | max, 100] | min | round(0) }}
+          {% else %}100{% endif %}
         availability: "{{ has_value('sensor.energy_production_today_remaining') }}"  # EDIT: same forecast sensor
 
       # Battery level minus the floor. Positive = energy that will come back today.

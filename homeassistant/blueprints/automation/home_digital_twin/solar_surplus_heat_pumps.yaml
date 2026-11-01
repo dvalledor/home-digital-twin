@@ -2,11 +2,13 @@ blueprint:
   name: Heat with solar surplus (Home Digital Twin)
   description: >
     Switches heat pumps / air conditioners on, one at a time and in priority order, using only
-    solar energy that the forecast says will come back before sunset. Starts when the battery is
-    full and the house exports to the grid, adds units while there is margin, and switches them
-    off again in reverse order when the battery falls below the dynamic floor. It never switches
-    off a unit that it did not switch on (marker booleans), waits 10 minutes between steps and
-    leaves a unit alone for 45 minutes after it was switched off.
+    solar energy that the forecast says will come back to the battery before the useful sun ends
+    (so the battery is still full in the evening). Starts when the battery is full and the house
+    exports to the grid, adds units while there is margin, and switches them off again in reverse
+    order when the battery falls below the dynamic floor. It never switches off a unit that it did
+    not switch on (marker booleans), waits 10 minutes between steps and leaves a unit alone for
+    45 minutes after it was switched off. When it is warm outdoors it does not heat, it only cools
+    rooms that are too warm.
 
     Needs the helpers and sensors of packages/home_digital_twin.yaml.
     Guide: https://github.com/dvalledor/home-digital-twin/blob/main/docs/automations.md
@@ -30,6 +32,18 @@ blueprint:
           selector:
             entity:
               domain: input_boolean
+              multiple: true
+        room_sensors:
+          name: Room sensors, same order (optional)
+          description: >
+            Used to decide between heating and cooling. Wall units measure the air near the ceiling,
+            often 2 to 5 °C warmer than the room. One climate entity (a smart radiator valve) or
+            temperature sensor per heat pump, in the same order. For a unit without a separate
+            sensor, pick the heat pump itself. Leave empty to use the units' own sensors.
+          default: []
+          selector:
+            entity:
+              domain: [climate, sensor]
               multiple: true
         setpoint:
           name: Setpoint
@@ -79,6 +93,13 @@ blueprint:
           selector:
             entity:
               domain: sensor
+        useful_sun_sensor:
+          name: Useful sun sensor
+          description: Everything this automation switched on is switched off when this goes off.
+          default: binary_sensor.surplus_useful_sun
+          selector:
+            entity:
+              domain: binary_sensor
         full_battery:
           name: Battery counts as full above
           default: 97
@@ -87,6 +108,24 @@ blueprint:
               min: 80
               max: 100
               unit_of_measurement: "%"
+    weather:
+      name: Outdoor temperature
+      icon: mdi:thermometer
+      collapsed: true
+      input:
+        outdoor_entity:
+          name: Outdoor temperature (optional)
+          description: A weather entity or an outdoor temperature sensor. Leave empty to always allow heating.
+          default: []
+          selector:
+            entity:
+              domain: [weather, sensor]
+        no_heating_above:
+          name: Do not heat if outdoors is above
+          default: input_number.surplus_no_heating_above_outdoor
+          selector:
+            entity:
+              domain: input_number
     switches:
       name: Switches
       icon: mdi:toggle-switch-outline
@@ -110,6 +149,17 @@ blueprint:
           selector:
             entity:
               domain: input_boolean
+        hands_off_entities:
+          name: Hands off while (optional)
+          description: >
+            While any of these is home / on, the automation does nothing at all: it does not switch
+            units on, change them or switch them off. Useful while you are still testing and somebody
+            at home prefers that the heating is left alone.
+          default: []
+          selector:
+            entity:
+              domain: [person, device_tracker, input_boolean, binary_sensor]
+              multiple: true
 
 mode: single
 max_exceeded: silent
@@ -122,27 +172,38 @@ triggers:
   - trigger: state
     entity_id: !input allow_away_switch
   - trigger: state
-    entity_id: sun.sun
-    to: below_horizon
+    entity_id: !input useful_sun_sensor
+    to: "off"
 
 variables:
   heat_pumps: !input heat_pumps
   markers: !input markers
+  room_sensors: !input room_sensors
   setpoint: !input setpoint
   cool_above: !input cool_above
   soc_entity: !input battery_soc
   grid_entity: !input grid_power
   export_positive: !input export_is_positive
   margin_entity: !input margin_sensor
+  useful_sun_entity: !input useful_sun_sensor
   full_battery: !input full_battery
+  outdoor_entity: !input outdoor_entity
+  no_heating_above_entity: !input no_heating_above
   enable_entity: !input enable_switch
   away_entity: !input away_entity
   allow_away_entity: !input allow_away_switch
+  hands_off: !input hands_off_entities
 
 conditions:
-  - alias: "Same number of heat pumps and markers"
+  - alias: "Same number of heat pumps and markers (and room sensors, if given)"
     condition: template
-    value_template: "{{ heat_pumps | length == markers | length and heat_pumps | length > 0 }}"
+    value_template: >
+      {{ heat_pumps | length == markers | length and heat_pumps | length > 0
+         and (room_sensors | length == 0 or room_sensors | length == heat_pumps | length) }}
+  - alias: "Hands off while somebody listed is home"
+    condition: template
+    value_template: >
+      {{ hands_off | select('is_state', ['home', 'on']) | list | length == 0 }}
 
 actions:
   - variables:
@@ -151,6 +212,12 @@ actions:
       export_w: "{{ (states(grid_entity) | float(0)) * (1 if export_positive else -1) }}"
       margin_ok: "{{ has_value(margin_entity) }}"
       margin: "{{ states(margin_entity) | float(0) }}"
+      outdoor: >
+        {% if outdoor_entity in [none, '', []] %}none
+        {% elif outdoor_entity.startswith('weather.') %}{{ state_attr(outdoor_entity, 'temperature') }}
+        {% else %}{{ states(outdoor_entity) | float(none) }}{% endif %}
+      heating_allowed: >
+        {{ outdoor is not number or outdoor < states(no_heating_above_entity) | float(20) }}
       away_blocks: >
         {{ away_entity not in [none, '', []] and is_state(away_entity, 'on') and is_state(allow_away_entity, 'off') }}
       on_idx: >
@@ -166,11 +233,22 @@ actions:
         {% endfor %}
         {{ ns.q }}
       last_on: "{{ on_idx | last if on_idx else -1 }}"
+      # temperature of each room: the room sensor if given, otherwise the unit's own sensor
+      room_temps: >
+        {% set ns = namespace(l=[]) %}
+        {% for i in range(n) %}
+          {% set s = room_sensors[i] if room_sensors | length == n else heat_pumps[i] %}
+          {% set t = state_attr(s, 'current_temperature') if s.startswith('climate.') else states(s) %}
+          {% set ns.l = ns.l + [t | float(20)] %}
+        {% endfor %}
+        {{ ns.l }}
+  - variables:
       next_off: >
         {% set ns = namespace(i=-1) %}
         {% for i in range(n) %}
           {% if ns.i < 0 and is_state(markers[i], 'off') and is_state(heat_pumps[i], 'off')
-                and (as_timestamp(now()) - as_timestamp(states[heat_pumps[i]].last_changed)) > 2700 %}{# off for 45 min #}
+                and (as_timestamp(now()) - as_timestamp(states[heat_pumps[i]].last_changed)) > 2700
+                and (room_temps[i] > cool_above or heating_allowed) %}{# off for 45 min; warm outdoors = cool only #}
             {% set ns.i = i %}
           {% endif %}
         {% endfor %}
@@ -180,7 +258,7 @@ actions:
         conditions:
           - condition: template
             value_template: >
-              {{ is_state(enable_entity, 'off') or away_blocks or is_state('sun.sun', 'below_horizon') or not margin_ok }}
+              {{ is_state(enable_entity, 'off') or away_blocks or is_state(useful_sun_entity, 'off') or not margin_ok }}
         sequence:
           - repeat:
               for_each: "{{ on_idx | reverse | list }}"
@@ -219,8 +297,7 @@ actions:
             target:
               entity_id: "{{ heat_pumps[next_off] }}"
             data:
-              hvac_mode: >
-                {{ 'cool' if state_attr(heat_pumps[next_off], 'current_temperature') | float(20) > cool_above else 'heat' }}
+              hvac_mode: "{{ 'cool' if room_temps[next_off] > cool_above else 'heat' }}"
           - action: climate.set_temperature
             target:
               entity_id: "{{ heat_pumps[next_off] }}"

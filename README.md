@@ -12,7 +12,7 @@ Everything runs in the browser from plain files. There is nothing to compile, no
 | --- | --- |
 | **3D twin** (`viewer/index.html`) | Your house as a diorama: rooms, stairs, doors, radiators, heat pumps, solar panels, the sun moving across the sky and the compass painted on the ground. A zone model simulates the temperature of every room until the next morning; the air moves as thousands of coloured dots, blue when cold and red when warm. Connect it to Home Assistant to see real temperatures, heat pumps and solar production live. |
 | **Solar calculator** (`viewer/solar.html`) | Fits panels on each roof face, simulates every hour of a typical year with or without a battery and recommends the number of panels, inverter and battery, with self-consumption, savings and payback. Can use PVGIS data for your exact location. |
-| **Home Assistant package and blueprints** (`homeassistant/`) | Switches heat pumps on, one at a time and in your order of priority, only with solar energy that will come back to the battery before sunset. Includes a bed-level setpoint for tall rooms and an A/B test to measure whether it is worth it. |
+| **Home Assistant packages and blueprints** (`homeassistant/`) | Switches heat pumps on, one at a time and in your order of priority, only with solar energy that will come back to the battery before the useful sun ends, and never heats when it is warm outdoors. Around it: heat pumps on a schedule, a bedroom at the right temperature at bedtime (switched on just in time, learning how fast the room cools), radiators at night, a warm room at breakfast and an away mode. Includes a bed-level setpoint for tall rooms and an A/B test to measure whether it is worth it. |
 | **Tools** (`tools/`) | Check your `house.json`, download PVGIS yields for your roof. |
 | **Guides** (`docs/`) | Everything needed to build it yourself, from photos of the house to a measured result. |
 
@@ -34,7 +34,7 @@ Follow **[docs/build-guide.md](docs/build-guide.md)**. In short:
 2. **Find the orientation**, the easy way is from your solar panels ([orientation](docs/orientation.md)).
 3. **Size your solar installation**, or describe the one you have ([solar guide](docs/solar.md)).
 4. **Connect Home Assistant** and host the twin inside it ([Home Assistant](docs/home-assistant.md)).
-5. **Install the automations** for solar surplus heating ([automations](docs/automations.md)).
+5. **Install the automations** for solar surplus heating and the rest of the day ([automations](docs/automations.md)).
 6. **Calibrate** the model with your own history ([thermal model](docs/thermal-model.md)) and **measure** the result with an A/B test ([A/B test](docs/ab-test.md)).
 
 ## Repository layout
@@ -46,8 +46,9 @@ viewer/                 the web app: copy this folder anywhere (or into Home Ass
   solar.js              shared solar model
   house.example.json    example house (rename a copy to house.json for yours)
 homeassistant/
-  packages/             helpers and template sensors
-  blueprints/           surplus heating, marker cleanup, bed-level setpoint
+  packages/             surplus helpers and sensors, bedtime warm-up, morning pre-heat
+  blueprints/           surplus heating, marker cleanup, bed-level setpoint,
+                        heat pumps and radiators on a schedule, away mode
 schema/                 JSON schema of house.json
 tools/                  validate_house.py, pvgis_sizing.py
 docs/                   guides
